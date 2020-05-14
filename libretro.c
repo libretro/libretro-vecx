@@ -10,7 +10,7 @@
 
 #include "libretro_core_options.h"
 
-//#define STANDARD_BIOS
+#define STANDARD_BIOS
 
 #ifdef STANDARD_BIOS
 #include "bios/system.h"
