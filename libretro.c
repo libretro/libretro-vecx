@@ -10,7 +10,7 @@
 
 #include "libretro_core_options.h"
 
-#define STANDARD_BIOS
+//#define STANDARD_BIOS
 
 #ifdef STANDARD_BIOS
 #include "bios/system.h"
@@ -117,6 +117,19 @@ void retro_get_system_av_info(struct retro_system_av_info *info)
 	info->geometry.aspect_ratio = 3.0 / 4.0;
 }
 
+static float get_float_variable(const char* key, float def) {
+   struct retro_variable var;
+
+   var.value = NULL;
+   var.key   = key;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+       return atof(var.value);
+   }
+   else {
+       return def;
+   }
+}
+
 static void check_variables(void)
 {
    struct retro_variable var;
@@ -153,14 +166,11 @@ static void check_variables(void)
          }
    }
 
-   var.value = NULL;
-   var.key   = "vecx_scale";
-   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
-       SCALEX = atof(var.value);
-       SCALEY = atof(var.value);
-   }
-   SHIFTX = 0.5-0.5*SCALEX;
-   SHIFTY = 0.5-0.5*SCALEY;
+   SCALEX = get_float_variable("vecx_scale_x", 1);
+   SCALEY = get_float_variable("vecx_scale_y", 1);
+   SHIFTX = 0.5*(1-SCALEX)+get_float_variable("vecx_shift_x", 0)/2.;
+   SHIFTY = 0.5*(1-SCALEY)+get_float_variable("vecx_shift_y", 0)/2.;
+
    retro_get_system_av_info(&av_info);
    environ_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &av_info);
 }
