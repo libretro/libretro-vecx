@@ -39,6 +39,6 @@ int vecx_serialize(char* dst, int size);
 int vecx_deserialize(char* dst, int size);
 
 void vecx_reset (void);
-void vecx_emu (long cycles);
+int vecx_emu (long cycles);
 
 #endif

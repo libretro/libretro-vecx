@@ -28,6 +28,17 @@ extern "C" {
 
 struct retro_core_option_definition option_defs_us[] = {
    {
+      "vecx_use_hw",
+      "Use Hardware Rendering",
+      "Configure the rendering method. You will need to exit and restart the emulator after changing this. (Switching to another game works but just restarting the current one doesn't.)",
+      {
+         { "Software", NULL},
+         { "Hardware", NULL},
+         { NULL, NULL },
+      },
+      "Software"
+   },
+   {
       "vecx_res_multi",
       "Internal Resolution Multiplier",
       "Configure the resolution.",
@@ -39,6 +50,98 @@ struct retro_core_option_definition option_defs_us[] = {
          { NULL, NULL },
       },
       "1"
+   },
+   {
+       "vecx_res_hw",
+       "Hardware Rendering Resolution",
+       "Configure the resolution.",
+       {
+           { "434x540", NULL },
+           { "515x640", NULL },
+           { "580x720", NULL },
+           { "618x768", NULL },
+           { "824x1024", NULL },
+           { "845x1050", NULL },
+           { "869x1080", NULL },
+           { "966x1200", NULL },
+           { "1159x1440", NULL },
+           { "1739x2160", NULL },
+           { NULL, NULL }
+       },
+       "824x1024"
+   },
+   {
+       "vecx_line_brightness",
+       "Line brightness",
+       "How bright the lines are.",
+       {
+           { "1", NULL },
+           { "2", NULL },
+           { "3", NULL },
+           { "4", NULL },
+           { "5", NULL },
+           { "6", NULL },
+           { "7", NULL },
+           { "8", NULL },
+           { "9", NULL },
+           { NULL, NULL }
+       },
+       "4"
+   },
+   {
+       "vecx_line_width",
+       "Line width",
+       "How wide the lines are. Set higher in low resolutions to avoid aliasing.",
+       {
+           { "1", NULL },
+           { "2", NULL },
+           { "3", NULL },
+           { "4", NULL },
+           { "5", NULL },
+           { "6", NULL },
+           { "7", NULL },
+           { "8", NULL },
+           { "9", NULL },
+           { NULL, NULL }
+       },
+       "4"
+   },
+   {
+       "vecx_glow_brightness",
+       "Glow brightness",
+       "How bright the glow is. 0 to switch glow off.",
+       {
+           { "0", NULL },
+           { "1", NULL },
+           { "2", NULL },
+           { "3", NULL },
+           { "4", NULL },
+           { "5", NULL },
+           { "6", NULL },
+           { "7", NULL },
+           { "8", NULL },
+           { "9", NULL },
+           { NULL, NULL }
+       },
+       "4"
+   },
+   {
+       "vecx_glow_width",
+       "Glow width",
+       "Glow width relative to the line width",
+       {
+           { "2x", NULL },
+           { "3x", NULL },
+           { "4x", NULL },
+           { "6x", NULL },
+           { "8x", NULL },
+           { "10x", NULL },
+           { "12x", NULL },
+           { "14x", NULL },
+           { "16x", NULL },
+           { NULL, NULL }
+       },
+       "8x"
    },
    { NULL, NULL, NULL, {{0}}, NULL },
 };

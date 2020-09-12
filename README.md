@@ -19,3 +19,4 @@ Authors
 * [John Hawthorn](https://twitter.com/jhawthorn) - SDL port
 * [Nikita Zimin](https://twitter.com/nzeemin) - audio
 * "Demeth" - libretro port
+* dave j - OpenGL rendering

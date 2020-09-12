@@ -1118,9 +1118,10 @@ static einline void alg_sstep (void)
 	}
 }
 
-void vecx_emu (long cycles)
+int vecx_emu (long cycles)
 {
 	unsigned c, icycles;
+    int ret = 0;
 
 	while (cycles > 0) {
 		icycles = e6809_sstep (via_ifr & 0x80, 0);
@@ -1140,6 +1141,7 @@ void vecx_emu (long cycles)
 
 			fcycles += FCYCLES_INIT;
 			osint_render ();
+            ret = 1;
 
 			/* everything that was drawn during this pass now now enters
 			 * the erase list for the next pass.
@@ -1153,4 +1155,5 @@ void vecx_emu (long cycles)
 			vectors_draw = tmp;
 		}
 	}
+	return ret;
 }

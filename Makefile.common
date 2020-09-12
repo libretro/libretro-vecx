@@ -15,7 +15,14 @@ else
 COREDEFINES += -DINLINE=inline
 endif
 
-SOURCES_C  := $(CORE_DIR)/e6809.c \
-				  $(CORE_DIR)/e8910.c \
-				  $(CORE_DIR)/libretro.c \
-				  $(CORE_DIR)/vecx.c
+ifeq ($(GLES), 1)
+   SOURCES_C += $(CORE_DIR)/glsym/glsym_es2.c
+else
+   SOURCES_C += $(CORE_DIR)/glsym/glsym_gl.c
+endif
+
+SOURCES_C  += $(CORE_DIR)/e6809.c \
+              $(CORE_DIR)/e8910.c \
+              $(CORE_DIR)/libretro.c \
+              $(CORE_DIR)/vecx.c\
+              $(CORE_DIR)/glsym/rglgen.c
