@@ -27,6 +27,7 @@ extern "C" {
  *   frontend language definition */
 
 struct retro_core_option_definition option_defs_us[] = {
+#ifdef HAS_GPU    
    {
       "vecx_use_hw",
       "Use Hardware Rendering",
@@ -36,8 +37,9 @@ struct retro_core_option_definition option_defs_us[] = {
          { "Hardware", NULL},
          { NULL, NULL },
       },
-      "Software"
+      "Hardware"
    },
+#endif   
    {
       "vecx_res_multi",
       "Internal Resolution Multiplier",
@@ -51,6 +53,7 @@ struct retro_core_option_definition option_defs_us[] = {
       },
       "1"
    },
+#ifdef HAS_GPU   
    {
        "vecx_res_hw",
        "Hardware Rendering Resolution",
@@ -143,6 +146,7 @@ struct retro_core_option_definition option_defs_us[] = {
        },
        "8x"
    },
+#endif   
    { NULL, NULL, NULL, {{0}}, NULL },
 };
 

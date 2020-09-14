@@ -9,9 +9,11 @@
 #include "e8910.h"
 #include "e6809.h"
 #include "libretro.h"
-#include "glsym/glsym.h"
 #include "libretro_core_options.h"
+#ifdef HAS_GPU
+#include "glsym/glsym.h"
 #include "dots.h"
+#endif
 
 #define STANDARD_BIOS
 
@@ -29,7 +31,7 @@ static int WIDTH = 330;
 static int HEIGHT = 410;
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
-
+#ifdef HAS_GPU
 #if defined(HAVE_PSGL)
 #define RARCH_GL_FRAMEBUFFER GL_FRAMEBUFFER_OES
 #define RARCH_GL_FRAMEBUFFER_COMPLETE GL_FRAMEBUFFER_COMPLETE_OES
@@ -43,6 +45,8 @@ static int HEIGHT = 410;
 #define RARCH_GL_FRAMEBUFFER_COMPLETE GL_FRAMEBUFFER_COMPLETE
 #define RARCH_GL_COLOR_ATTACHMENT0 GL_COLOR_ATTACHMENT0
 #endif
+static struct retro_hw_render_callback hw_render;
+#endif
 
 #ifdef _3DS
 #define BUFSZ 135300
@@ -50,8 +54,6 @@ static int HEIGHT = 410;
 #define BUFSZ 2164800
 #endif
 
-static bool usingHWContext = false;
-static struct retro_hw_render_callback hw_render;
 static retro_video_refresh_t video_cb;
 static retro_input_poll_t poll_cb;
 static retro_input_state_t input_state_cb;
@@ -61,6 +63,8 @@ static retro_audio_sample_t audio_cb;
 static unsigned char point_size;
 static unsigned short framebuffer[BUFSZ];
 
+#ifdef HAS_GPU
+static bool usingHWContext = false;
 static GLuint ProgramID;
 static GLuint mvpMatrixLocation;
 static GLuint positionAttribLocation;
@@ -100,7 +104,7 @@ typedef struct {
 } GLVERTEX;
 #define MAX_VECTORS 50000
 static GLVERTEX verticies[MAX_VECTORS * 18];
-
+#endif
 extern unsigned char vecx_ram[1024];
 
 /* Empty stubs */
@@ -174,6 +178,7 @@ void retro_get_system_av_info(struct retro_system_av_info *info)
 	info->geometry.aspect_ratio = 33.0 / 41.0;
 }
 
+#ifdef HAS_GPU
 void CreateImage(uint32_t width, uint32_t height, const uint8_t *data, GLuint *textureId)
 {
     GLenum err;
@@ -302,7 +307,6 @@ static void context_reset(void)
 static void context_destroy(void)
 {
 //   fprintf(stderr, "Context destroy!\n");
-
 #ifdef CORE
    glDeleteVertexArrays(1, &vao);
    vao = 0;
@@ -329,7 +333,6 @@ static void context_destroy(void)
         glDeleteProgram(ProgramID);
         ProgramID = 0;
     }
-   
 }
 
 #ifdef HAVE_OPENGLES
@@ -387,9 +390,11 @@ static bool retro_init_hw_context(bool useHardwareContext)
    return true;
 }
 #endif
+#endif
 
 static bool set_rendering_context(bool useHardwareContext)
 {
+#ifdef HAS_GPU    
     if (useHardwareContext)
     {
         enum retro_pixel_format fmt = RETRO_PIXEL_FORMAT_XRGB8888;
@@ -403,10 +408,13 @@ static bool set_rendering_context(bool useHardwareContext)
         return true;
     }
     else
+#endif        
     {
         enum retro_pixel_format fmt = RETRO_PIXEL_FORMAT_0RGB1555;
         environ_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt);
+#ifdef HAS_GPU        
         retro_init_hw_context(false);
+#endif        
         return true;
     }
 }
@@ -416,6 +424,7 @@ static void check_variables(void)
    struct retro_variable var;
    struct retro_system_av_info av_info;
 
+#ifdef HAS_GPU   
    var.value = NULL;
    var.key = "vecx_use_hw";
    
@@ -510,6 +519,7 @@ static void check_variables(void)
         }
    }
    else
+#endif       
    {
     var.value = NULL;
     var.key   = "vecx_res_multi";
@@ -597,7 +607,7 @@ bool retro_load_game(const struct retro_game_info *info)
 
    if (!info)
       return false;
-
+#ifdef HAS_GPU
     if (usingHWContext)
     {
         usingHWContext = set_rendering_context(true);
@@ -628,7 +638,10 @@ bool retro_load_game(const struct retro_game_info *info)
         option_display.key = "vecx_glow_width";
         environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display);
     }
-
+#else
+    set_rendering_context(false);
+#endif
+    
    environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, desc);
 
    e8910_init_sound();
@@ -718,6 +731,7 @@ static INLINE void draw_line(unsigned x0, unsigned y0, unsigned x1, unsigned y1,
   }
 }
 
+#ifdef HAS_GPU
 static inline uint32_t MakeAll(float dx, float dy, int8_t col, uint8_t tc)
 {
     return (((int8_t)(dx*64.0f+0.5f)) & 0xff) | (((int8_t)(dy*64.0f+0.5f) & 0xff) << 8) | ((col << 16)&0xff0000) | (tc << 24);
@@ -755,11 +769,13 @@ static inline POINT IntersectionPoint(POINT a, POINT b, POINT c, POINT d)
 
     return res;
 }
-
+#endif
 
 void osint_render(void)
 {
+#ifdef HAS_GPU    
     if (!usingHWContext)
+#endif        
     {
         int i;
         unsigned char intensity;
@@ -787,6 +803,7 @@ void osint_render(void)
                 draw_line(x0, y0, x1, y1, intensity);
         }
     }
+#ifdef HAS_GPU    
     else
     {
         GLint scissorTestEnabled = glIsEnabled(GL_SCISSOR_TEST);
@@ -1041,6 +1058,7 @@ void osint_render(void)
     	/* Start rendering ASAP by hinting to GL start get rendering now. */
         glFlush();
     }
+#endif    
 }
 
 /* NOTE: issue with this core atm. (and thus, emulation) is partly input
@@ -1140,9 +1158,11 @@ void retro_run(void)
 		audio_cb(convs, convs);
 	}
 
+#ifdef HAS_GPU	
     if (usingHWContext)
         video_cb(ret ? RETRO_HW_FRAME_BUFFER_VALID : NULL, WIDTH, HEIGHT, 0);
     else
+#endif        
         video_cb(framebuffer, WIDTH, HEIGHT, WIDTH * sizeof(unsigned short));
     
     if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &updated) && updated)
