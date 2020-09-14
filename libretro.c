@@ -29,6 +29,10 @@
 
 static int WIDTH = 330;
 static int HEIGHT = 410;
+static float SHIFTX = 0;
+static float SHIFTY = 0;
+static float SCALEX = 1.;
+static float SCALEY = 1.;
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 #ifdef HAS_GPU
@@ -287,7 +291,7 @@ static void compile_program(void)
    offsetAttribLocation = glGetAttribLocation(ProgramID, "offset");
    colourAttribLocation = glGetAttribLocation(ProgramID, "colour");
    packedTexCoordsAttribLocation = glGetAttribLocation(ProgramID, "packedTexCoords");
-   MakeMVPMatrix(mvpMatrix, 0.0f, ALG_MAX_Y-1, ALG_MAX_X-1, 0.0f);
+   MakeMVPMatrix(mvpMatrix, 0.0f-(SHIFTX*ALG_MAX_X), (ALG_MAX_Y-1)/SCALEY-(SHIFTY*ALG_MAX_Y), (ALG_MAX_X-1)/SCALEX-(SHIFTX*ALG_MAX_X), 0.0f-(SHIFTY*ALG_MAX_Y));
 }
 
 static void context_reset(void)
@@ -419,6 +423,19 @@ static bool set_rendering_context(bool useHardwareContext)
     }
 }
 
+static float get_float_variable(const char* key, float def) {
+   struct retro_variable var;
+
+   var.value = NULL;
+   var.key   = key;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value) {
+       return atof(var.value);
+   }
+   else {
+       return def;
+   }
+}
+
 static void check_variables(void)
 {
    struct retro_variable var;
@@ -469,7 +486,6 @@ static void check_variables(void)
             if (pch)
                 HEIGHT = strtoul(pch, NULL, 0);
 
-//            fprintf(stderr, "[libretro-test]: Got size: %u x %u.\n", WIDTH, HEIGHT);
             usingHWContext = true;
         }
         else
@@ -551,6 +567,12 @@ static void check_variables(void)
             }
     }
    }
+
+   SCALEX = get_float_variable("vecx_scale_x", 1);
+   SCALEY = get_float_variable("vecx_scale_y", 1);
+   SHIFTX = 0.5*(1-SCALEX)+get_float_variable("vecx_shift_x", 0)/2.;
+   SHIFTY = 0.5*(1-SCALEY)+get_float_variable("vecx_shift_y", 0)/2.;
+
    retro_get_system_av_info(&av_info);
    environ_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &av_info);
 }
@@ -693,29 +715,67 @@ static INLINE uint16_t RGB1555(int col)
     return col << 10 | col << 5 | col;
 }
 
-static INLINE void draw_point(int x, int y, unsigned char col)
+static INLINE void draw_point(int x, int y, uint16_t col)
 {
-   int psz = point_size;
-   int sy, ey, sx, ex;
-
-   if (psz == 1)
+   if (point_size == 1)
    {
-      framebuffer[ (y * WIDTH) + x ] = RGB1555(col);
-      return;
+      if (0 <= x && x < WIDTH && 0 <= y && y < HEIGHT)
+          framebuffer[ (y * WIDTH) + x ] = col;
    }
+   else if (point_size == 2)
+   {
+      /* point shape:
+       * .X.
+       * XXX
+       * .X.
+       */
+      int pos = y * WIDTH + x;
+      if (0 <= x && x < WIDTH && 0 <= y && y < HEIGHT)
+          framebuffer[ pos ] = col;
+      if ( x > 0 )
+	  framebuffer[ pos - 1 ] = col;
+      if ( x < WIDTH -1 )
+	  framebuffer[ pos + 1 ] = col;
+      if ( y > 0)
+	  framebuffer[ pos - WIDTH ] = col;
+      if ( y < HEIGHT - 1 )
+	  framebuffer[ pos + WIDTH ] = col;
+   }
+   else
+   {
+      int dy, posy;
+      /* point shape: 
+       * .XX.
+       * XXXX
+       * XXXX
+       * .XX.
+       */
 
-   sy = y - psz > 0        ? y - psz : 0;
-   ey = y + psz<= HEIGHT-1 ? y + psz : HEIGHT - 1;
-   sx = x - psz > 0        ? x - psz : 0;
-   ex = x + psz<= WIDTH -1 ? x + psz : WIDTH  - 1;
+      x--;
+      y--;
 
-   for (y = sy; y <= ey; y++)
-      for (x = sx; x <= ex; x++)
-         if ( (x-sx) * (x-sx) + (y - sy) * (y - sy) <= psz * psz)
-            framebuffer[ (y * WIDTH) + x ] = RGB1555(col);
+      posy = y * WIDTH;
+
+      for (dy = 0 ; dy < 4 ; dy++, posy += WIDTH)
+      {
+	  int y1 = y + dy;
+
+	  if (0 <= y1 && y1 < HEIGHT)
+	  {
+	      int dx;
+	      for (dx = 0 ; dx < 4 ; dx++)
+	      {
+		  int x1 = x + dx;
+
+		  if (0 <= x1 && x1 < WIDTH && ( dx % 3 != 0 || dy % 3 != 0))
+                      framebuffer[ posy + x1 ] = col;
+	      }
+	  }
+      }
+   }
 }
 
-static INLINE void draw_line(unsigned x0, unsigned y0, unsigned x1, unsigned y1, unsigned char col)
+static INLINE void draw_line(unsigned x0, unsigned y0, unsigned x1, unsigned y1, uint16_t col)
 {
   int dx = abs((int)x1-(int)x0), sx = x0<x1 ? 1 : -1;
   int dy = abs((int)y1-(int)y0), sy = y0<y1 ? 1 : -1; 
@@ -785,27 +845,28 @@ void osint_render(void)
 
         memset(framebuffer, 0, BUFSZ * sizeof(unsigned short));
 
-        /* rasterize list of vectors */
+   /* rasterize list of vectors */
         for (i = 0; i < vector_draw_cnt; i++)
         {
             unsigned char intensity = vectors_draw[i].color;
-            x0 = (float)vectors_draw[i].x0 / (float)ALG_MAX_X * (float)WIDTH;
-            x1 = (float)vectors_draw[i].x1 / (float)ALG_MAX_X * (float)WIDTH;
-            y0 = (float)vectors_draw[i].y0 / (float)ALG_MAX_Y * (float)HEIGHT;
-            y1 = (float)vectors_draw[i].y1 / (float)ALG_MAX_Y * (float)HEIGHT;
+            x0 = ((float)vectors_draw[i].x0 / (float)ALG_MAX_X * SCALEX + SHIFTX) * (float)WIDTH;
+            x1 = ((float)vectors_draw[i].x1 / (float)ALG_MAX_X * SCALEX + SHIFTX) * (float)WIDTH;
+            y0 = ((float)vectors_draw[i].y0 / (float)ALG_MAX_Y * SCALEY + SHIFTY) * (float)HEIGHT;
+            y1 = ((float)vectors_draw[i].y1 / (float)ALG_MAX_Y * SCALEY + SHIFTY) * (float)HEIGHT;
 
             if (intensity == 128)
                 continue;
-            
+        
             if (x0 - x1 == 0 && y0 - y1 == 0)
-                draw_point(x0, y0, intensity);
+                draw_point(x0, y0, RGB1555(intensity));
             else
-                draw_line(x0, y0, x1, y1, intensity);
+                draw_line(x0, y0, x1, y1, RGB1555(intensity));
         }
     }
 #ifdef HAS_GPU    
     else
     {
+        MakeMVPMatrix(mvpMatrix, 0.0f-(SHIFTX*ALG_MAX_X), (ALG_MAX_Y-1)/SCALEY-(SHIFTY*ALG_MAX_Y), (ALG_MAX_X-1)/SCALEX-(SHIFTX*ALG_MAX_X), 0.0f-(SHIFTY*ALG_MAX_Y));
         GLint scissorTestEnabled = glIsEnabled(GL_SCISSOR_TEST);
         GLint scissorBox[4];
         glGetIntegerv(GL_SCISSOR_BOX, scissorBox);
@@ -1078,20 +1139,23 @@ void retro_run(void)
 
 	/* Player 1 */
 
+	
+	alg_jch0=input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X) / 256 + 128;
+	alg_jch1=input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y) / 256 + 128;
+	
+	if (alg_jch0 == 128) {
 	if      (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT ))
 		alg_jch0 = 0x00;
 	else if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT))
 		alg_jch0 = 0xff;
-	else
-		alg_jch0 = 0x80;
+	}
 
+	if (alg_jch1 == 128) {
 	if      (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP   ))
 		alg_jch1 = 0xff;
 	else if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN ))
 		alg_jch1 = 0x00;
-	else
-		alg_jch1 = 0x80;
-
+	}
 
 	if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A ))
 		snd_regs[14] &= ~1;
@@ -1114,19 +1178,20 @@ void retro_run(void)
 		snd_regs[14] |= 8;
 
 	/* Player 2 */
-	if      (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT ))
-		alg_jch2 = 0x00;
-	else if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT))
-		alg_jch2 = 0xff;
-	else
-		alg_jch2 = 0x80;
+	alg_jch2=input_state_cb(1, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X) / 256 + 128;
+	alg_jch3=input_state_cb(1, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y) / 256 + 128;
 
-	if      (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP   ))
-		alg_jch3 = 0xff;
-	else if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN ))
-		alg_jch3 = 0x00;
-	else
-		alg_jch3 = 0x80;
+	if (alg_jch2 == 128 && alg_jch3 == 128) {
+		if      (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT ))
+			alg_jch2 = 0x00;
+		else if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT))
+			alg_jch2 = 0xff;
+
+		if      (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP   ))
+			alg_jch3 = 0xff;
+		else if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN ))
+			alg_jch3 = 0x00;
+	}
 
 	if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A ))
 		snd_regs[14] &= ~16;

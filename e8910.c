@@ -2,9 +2,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#ifndef __LIBRETRO__
-#include "SDL.h"
-#endif
 #include "e8910.h"
 
 #define SOUND_FREQ   22050
@@ -568,48 +565,18 @@ e8910_build_mixer_table()
 	PSG.VolTable[0] = 0;
 }
 
-void
-e8910_init_sound()
+void e8910_init_sound(void)
 {
-#ifndef __LIBRETRO__
-	// SDL audio stuff
-	SDL_AudioSpec reqSpec;
-	SDL_AudioSpec givenSpec;
-#endif
-
-	PSG.RNG  = 1;
+	PSG.RNG     = 1;
 	PSG.OutputA = 0;
 	PSG.OutputB = 0;
 	PSG.OutputC = 0;
 	PSG.OutputN = 0xff;
 	e8910_build_mixer_table();
-	PSG.ready = 1;
-
-#ifndef __LIBRETRO__
-	// set up audio buffering
-	reqSpec.freq = SOUND_FREQ;            // Audio frequency in samples per second
-	reqSpec.format = AUDIO_U8;          // Audio data format
-	reqSpec.channels = 1;            // Number of channels: 1 mono, 2 stereo
-	reqSpec.samples = SOUND_SAMPLE;            // Audio buffer size in samples
-	reqSpec.callback = e8910_callback;      // Callback function for filling the audio buffer
-	reqSpec.userdata = NULL;
-
-/* Open the audio device */
-	if ( SDL_OpenAudio(&reqSpec, &givenSpec) < 0 ){
-		fprintf(stderr, "Couldn't open audio: %s\n", SDL_GetError());
-		exit(-1);
-	}
-	
-// Start playing audio
-	SDL_PauseAudio(0);
-#endif
+	PSG.ready   = 1;
 }
 
-void
-e8910_done_sound()
+void e8910_done_sound(void)
 {
-#ifndef __LIBRETRO__
-	SDL_CloseAudio();
-#endif
 }
 
