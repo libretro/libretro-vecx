@@ -68,7 +68,7 @@ struct retro_core_option_definition option_defs_us[] = {
            { "869x1080", NULL },
            { "966x1200", NULL },
            { "1159x1440", NULL },
-           { "1739x2160", NULL },
+           { "1648x2048", NULL },
            { NULL, NULL }
        },
        "824x1024"
