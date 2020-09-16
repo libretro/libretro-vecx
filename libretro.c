@@ -15,6 +15,8 @@
 #include "dots.h"
 #endif
 
+retro_log_printf_t log_cb;
+
 #define STANDARD_BIOS
 
 #ifdef STANDARD_BIOS
@@ -189,12 +191,12 @@ void CreateImage(uint32_t width, uint32_t height, const uint8_t *data, GLuint *t
     glGenTextures(1, textureId);
     if ((err = glGetError()))
     {
-        fprintf(stderr, "Error generating texture: %x\n", err);
+        log_cb(RETRO_LOG_ERROR, "Error generating GL texture: %x\n", err);
     }
     glBindTexture(GL_TEXTURE_2D, *textureId);
     if ((err = glGetError()))
     {
-        fprintf(stderr, "Error binding texture: %x\n", err);
+        log_cb(RETRO_LOG_ERROR, "Error binding GL texture: %x\n", err);
     }
     
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -203,7 +205,7 @@ void CreateImage(uint32_t width, uint32_t height, const uint8_t *data, GLuint *t
     glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, width, height, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, data);
     if ((err = glGetError()))
     {
-        fprintf(stderr, "Error loading texture: %x\n", err);
+        log_cb(RETRO_LOG_ERROR, "Error loading GL texture: %x\n", err);
     }
 }
 
@@ -241,7 +243,7 @@ static void compile_program(void)
                                           
                                           " void main()\n"
                                           "{\n"
-                                          "   vec2 pos = position + (offset / 64.0) * scale * colour / 127.0;\n"
+                                          "   vec2 pos = position + (offset / 64.0) * scale * (colour / 255.0 + 0.5);\n"
                                           "   fragColour = colour * brightness / (127.0 * 255.0);\n" 
                                           "   float tx = floor(packedTexCoords * 0.0625);\n" // RPI gets upset if we divide by 16 so multiply by 1/16 instead.
                                           "   float ty = packedTexCoords - tx * 16.0;\n"
@@ -296,7 +298,6 @@ static void compile_program(void)
 
 static void context_reset(void)
 {
-//fprintf(stderr, "Context reset!\n");
    rglgen_resolve_symbols(hw_render.get_proc_address);
 
    compile_program();
@@ -310,7 +311,6 @@ static void context_reset(void)
 
 static void context_destroy(void)
 {
-//   fprintf(stderr, "Context destroy!\n");
 #ifdef CORE
    glDeleteVertexArrays(1, &vao);
    vao = 0;
@@ -404,7 +404,7 @@ static bool set_rendering_context(bool useHardwareContext)
         enum retro_pixel_format fmt = RETRO_PIXEL_FORMAT_XRGB8888;
         if (!environ_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt) || !retro_init_hw_context(true))
         {
-//            fprintf(stderr, "XRGB8888 is not supported or couldn't initialise HW context, using software renderer.\n");
+            log_cb(RETRO_LOG_INFO, "XRGB8888 is not supported or couldn't initialise HW context, using software renderer.\n");
             enum retro_pixel_format fmt = RETRO_PIXEL_FORMAT_0RGB1555;
             environ_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt);
             return false;
@@ -577,8 +577,19 @@ static void check_variables(void)
    environ_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &av_info);
 }
 
+static void fallback_log(enum retro_log_level level, const char *fmt, ...)
+{
+}
+
 void retro_init(void)
 {
+   struct retro_log_callback log;
+   if (environ_cb(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &log))
+      log_cb = log.log;
+   else
+      log_cb = fallback_log;
+
+    
    unsigned level = 5; 
    environ_cb(RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL, &level);
 
@@ -870,7 +881,6 @@ void osint_render(void)
         GLint scissorTestEnabled = glIsEnabled(GL_SCISSOR_TEST);
         GLint scissorBox[4];
         glGetIntegerv(GL_SCISSOR_BOX, scissorBox);
-//        fprintf(stderr, "\rsbwidth=%d, sbheight=%d", scissorBox[2], scissorBox[3]);
         glBindFramebuffer(RARCH_GL_FRAMEBUFFER, hw_render.get_current_framebuffer());
 
 /* The texture backing the framebuffer is square and a power-of-two, we only draw in the bottom left of it.
