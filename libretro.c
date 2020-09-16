@@ -79,16 +79,16 @@ static GLuint textureLocation;
 static GLuint scaleLocation;
 static GLuint brightnessLocation;
 static GLuint DotTextureID;
-static GLuint GlowTextureID;
+static GLuint BloomTextureID;
 static GLuint vbo;
 GLfloat mvpMatrix[16];
 
 static const float dotScale = 1.0f;
 static float lineWidth = 75.0f;
 static float lineBrightness = 216.0f;
-static float glowWidthMultiplier = 8.0f;
+static float bloomWidthMultiplier = 8.0f;
 static float maxAlpha = 0.2f;
-static const float glowBrightness = 200.0f;
+static const float bloomBrightness = 200.0f;
 
 typedef struct {
     float x;
@@ -241,7 +241,7 @@ static void compile_program(void)
                                           
                                           " void main()\n"
                                           "{\n"
-                                          "   vec2 pos = position + (offset / 64.0) * scale;\n"
+                                          "   vec2 pos = position + (offset / 64.0) * scale * colour / 127.0;\n"
                                           "   fragColour = colour * brightness / (127.0 * 255.0);\n" 
                                           "   float tx = floor(packedTexCoords * 0.0625);\n" // RPI gets upset if we divide by 16 so multiply by 1/16 instead.
                                           "   float ty = packedTexCoords - tx * 16.0;\n"
@@ -301,7 +301,7 @@ static void context_reset(void)
 
    compile_program();
    CreateImage(DotWidth, DotHeight, DotImage, &DotTextureID);
-   CreateImage(GlowWidth, GlowHeight, GlowImage, &GlowTextureID);
+   CreateImage(BloomWidth, BloomHeight, BloomImage, &BloomTextureID);
 //   setup_vao();
 #ifdef CORE
    context_alive = true;
@@ -327,10 +327,10 @@ static void context_destroy(void)
         glDeleteTextures(1, &DotTextureID);
         DotTextureID = 0;
     }
-    if (GlowTextureID)
+    if (BloomTextureID)
     {
-        glDeleteTextures(1, &GlowTextureID);
-        GlowTextureID = 0;
+        glDeleteTextures(1, &BloomTextureID);
+        BloomTextureID = 0;
     }
     if (ProgramID)
     {
@@ -495,7 +495,7 @@ static void check_variables(void)
    if (usingHWContext)
    {
         var.value = NULL;
-        var.key = "vecx_glow_brightness";
+        var.key = "vecx_bloom_brightness";
         if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
         {
             int value = atoi(var.value);
@@ -525,13 +525,13 @@ static void check_variables(void)
         }
         
         var.value = NULL;
-        var.key = "vecx_glow_width";
+        var.key = "vecx_bloom_width";
         if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
         {
             int value = atoi(var.value);
             if (value <= 0)
                 value = 8;
-            glowWidthMultiplier = value;
+            bloomWidthMultiplier = value;
         }
    }
    else
@@ -655,9 +655,9 @@ bool retro_load_game(const struct retro_game_info *info)
         environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display);
         option_display.key = "vecx_line_width";
         environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display);
-        option_display.key = "vecx_glow_brightness";
+        option_display.key = "vecx_bloom_brightness";
         environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display);
-        option_display.key = "vecx_glow_width";
+        option_display.key = "vecx_bloom_width";
         environ_cb(RETRO_ENVIRONMENT_SET_CORE_OPTIONS_DISPLAY, &option_display);
     }
 #else
@@ -1079,15 +1079,15 @@ void osint_render(void)
             }
         }
 
-        // Draw the glowing lines if enabled.
+        // Draw the blooming lines if enabled.
         if (maxAlpha > 0.0f)
         {
             glEnable(GL_TEXTURE_2D);
             glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, GlowTextureID);
+            glBindTexture(GL_TEXTURE_2D, BloomTextureID);
             glUniform1i(textureLocation, 0);
-            glUniform1f(scaleLocation, lineWidth * glowWidthMultiplier);
-            glUniform1f(brightnessLocation, glowBrightness);
+            glUniform1f(scaleLocation, lineWidth * bloomWidthMultiplier);
+            glUniform1f(brightnessLocation, bloomBrightness);
             glBlendEquation(GL_FUNC_ADD);
             glBlendFunc(GL_ONE_MINUS_DST_ALPHA, GL_ONE);
             glDrawArrays(GL_TRIANGLES, 0, numVerts);

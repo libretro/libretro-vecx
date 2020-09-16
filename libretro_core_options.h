@@ -110,9 +110,9 @@ struct retro_core_option_definition option_defs_us[] = {
        "4"
    },
    {
-       "vecx_glow_brightness",
+       "vecx_bloom_brightness",
        "Glow brightness",
-       "How bright the glow is. 0 to switch glow off.",
+       "How bright the bloom is. 0 to switch bloom off.",
        {
            { "0", NULL },
            { "1", NULL },
@@ -129,7 +129,7 @@ struct retro_core_option_definition option_defs_us[] = {
        "4"
    },
    {
-       "vecx_glow_width",
+       "vecx_bloom_width",
        "Glow width",
        "Glow width relative to the line width",
        {
