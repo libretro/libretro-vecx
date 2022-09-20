@@ -51,3 +51,7 @@ By Malban - (http://vide.malban.de/).
 * added support for "auto_sync" (cleaner display where is works) (synced with T2 timer...)
 * added some configuration options  
 * changed the aspect ratio of the display and "shrinked" it a bit
+
+![Vectorblade](http://vectrex.malban.de/libretro/LibRetro_VB.png)
+![CleanSweep](http://vectrex.malban.de/libretro/LibRetro_Sweep.png)
+![BadApple](http://vectrex.malban.de/libretro/LibRetro_BadApple.png)
