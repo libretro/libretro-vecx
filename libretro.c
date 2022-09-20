@@ -1,3 +1,14 @@
+// splines
+// 3d games
+// todo change the line drawin in GL it looks not really great!
+// changle line drawing (anti alias ...) in frame buffer...
+
+#ifdef HAS_GPU
+#define DRAW_CHASSIS 1
+int contextIsSet=0;
+#endif
+
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -9,6 +20,10 @@
 #include "e8910.h"
 #include "e6809.h"
 #include "libretro.h"
+
+#include <file/file_path.h>
+#include <formats/image.h>
+
 #include "libretro_core_options.h"
 #ifdef HAS_GPU
 #include "dots.h"
@@ -31,10 +46,13 @@ retro_log_printf_t log_cb;
 
 static int WIDTH    = 330;
 static int HEIGHT   = 410;
+static int overwriteFlash = 0;
 static float SHIFTX = 0;
 static float SHIFTY = 0;
 static float SCALEX = 1.;
 static float SCALEY = 1.;
+
+static int dontOverDoDots = 1;
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 #ifdef HAS_GPU
@@ -72,6 +90,7 @@ static unsigned char point_size;
 static unsigned short framebuffer[BUFSZ];
 
 #ifdef HAS_GPU
+static int alphaSupport = 0;
 static bool usingHWContext = false;
 
 static GLuint ProgramID;
@@ -85,6 +104,13 @@ static GLuint scaleLocation;
 static GLuint brightnessLocation;
 static GLuint DotTextureID;
 static GLuint BloomTextureID;
+
+#ifdef DRAW_CHASSIS
+static GLuint ChassisProgramID = 0;
+static GLuint ChassisTextureID = 0;
+static int enableChassisDraw = 0;
+static int chassisLoaded = 0;
+#endif
 static GLuint vbo;
 GLfloat mvp_matrix[16];
 
@@ -121,6 +147,14 @@ typedef struct
 
 #endif
 extern unsigned char vecx_ram[1024];
+
+unsigned char *movieBuffer = NULL;
+static unsigned char cart[0x10000*4];
+static char orgNameBuf[255];
+static char _pathBuf[255];
+static char* pathBuf = NULL;
+static int cartsizeInBytes = 0;
+
 
 /* Empty stubs */
 void retro_set_controller_port_device(unsigned port, unsigned device) {}
@@ -165,7 +199,7 @@ void retro_get_system_info(struct retro_system_info *info)
 #ifndef GIT_VERSION
 #define GIT_VERSION ""
 #endif
-   info->library_version = "1.2" GIT_VERSION;
+   info->library_version = "1.5" GIT_VERSION;
    info->need_fullpath = false;
    info->valid_extensions = "bin|vec";
 }
@@ -175,11 +209,11 @@ void retro_get_system_av_info(struct retro_system_av_info *info)
    memset(info, 0, sizeof(*info));
    info->timing.fps            = 50.0;
    info->timing.sample_rate    = 44100;
-   info->geometry.base_width   = 330;
-   info->geometry.base_height  = 410;
+   info->geometry.base_width   = WIDTH;
+   info->geometry.base_height  = HEIGHT;
 #if defined(_3DS) || defined(RETROFW)
-   info->geometry.max_width    = 330;
-   info->geometry.max_height   = 410;
+   info->geometry.max_width    = WIDTH;
+   info->geometry.max_height   = HEIGHT;
 #else
    info->geometry.max_width    = 2048;
    info->geometry.max_height   = 2048;
@@ -210,29 +244,280 @@ static void make_mvp_matrix(float mvp_mat[16],
    mvp_mat[15]   = 1.0f;
 }
 
+#ifdef DRAW_CHASSIS
+static void compile_chassis_gl_program(void)
+{
+   const GLchar *vertexShaderSource[] = {
+		" \n"
+		"void main() \n"
+		"{\n"
+		"gl_TexCoord[0] = gl_TextureMatrix[0] * gl_MultiTexCoord0;"
+		"gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;"
+		"}\n"
+   };
+
+
+   const char *fragmentShaderSource[] = {
+		" \n"
+		"uniform sampler2D screenTexture;\n"
+		"uniform float screenBrightnessAdjust; \n"
+		"void main() \n"
+		"{\n"
+         "   vec2 coord = gl_TexCoord[0].xy;\n"
+         "   vec4 screenColor = texture2D(screenTexture, coord).xyzw;\n"
+         "   gl_FragColor = vec4(screenColor.x*screenBrightnessAdjust,screenColor.y*screenBrightnessAdjust,screenColor.z*screenBrightnessAdjust,screenColor.w);\n"
+		"}\n"
+   };
+/* newer GL
+   const GLchar *vertexShaderSource_2[] = {
+		"#version 130\n"
+		"varying vec2 texCoord;\n"
+		" \n"
+		"void main() \n"
+		"{\n"
+         "   gl_Position = vec4(aPos.x, aPos.y, aPos.z, 1.0);\n"
+         "   texCoord = vec2(gl_MultiTexCoord0);\n"
+		"}\n"
+   };
+   const char *fragmentShaderSource_2[] = {
+		"#version 130\n"
+		"\n"
+		"uniform sampler2D screenTexture;\n"
+		"uniform float screenBrightnessAdjust; \n"
+		"out vec4 fragColor;\n"
+		"in vec2 texCoord;\n"
+		" \n"
+		"void main() \n"
+		"{\n"
+		" vec2 coord = texCoord.xy;\n"
+		" vec4 screenColor = texture2D(screenTexture, coord).xyzw;\n"
+		" fragColor = vec4(screenColor.x*screenBrightnessAdjust,screenColor.y*screenBrightnessAdjust,screenColor.z*screenBrightnessAdjust,screenColor.w);\n"
+		"\n"
+		"}\n"
+		   };
+*/
+
+   GLuint vert = glCreateShader(GL_VERTEX_SHADER);
+   GLuint frag = glCreateShader(GL_FRAGMENT_SHADER);
+   if ((vert==0) || (frag==0)) {return;}
+   ChassisProgramID   = glCreateProgram();
+
+
+   glShaderSource(vert, ARRAY_SIZE(vertexShaderSource), vertexShaderSource, 0);
+   glCompileShader(vert);
+	GLint result;
+	glGetShaderiv(vert, GL_COMPILE_STATUS, &result);
+	if (result == GL_TRUE ) log_cb(RETRO_LOG_INFO, "Chassis vert Shader Compile successfull\n"); 
+	else
+	{
+		log_cb(RETRO_LOG_ERROR, "Chassis vert Shader Compile failed\n");
+		glGetShaderiv(vert, GL_INFO_LOG_LENGTH, &result);
+		int size = result;
+		char *buffer = malloc(size+1);
+		glGetShaderInfoLog(vert, result, &result, buffer);
+		log_cb(RETRO_LOG_INFO, "Error(%i): %s \n", size, buffer);
+		free(buffer);
+	}	
+   glShaderSource(frag, ARRAY_SIZE(fragmentShaderSource), fragmentShaderSource, 0);
+   glCompileShader(frag);
+	glGetShaderiv(frag, GL_COMPILE_STATUS, &result);
+	if (result == GL_TRUE ) log_cb(RETRO_LOG_INFO, "Chassis frag Shader Compile successfull\n"); 
+	else 
+	{
+		log_cb(RETRO_LOG_ERROR, "Chassis frag Shader Compile failed\n");
+		glGetShaderiv(frag, GL_INFO_LOG_LENGTH, &result);
+		int size = result;
+		char *buffer = malloc(size+1);
+		glGetShaderInfoLog(frag, result, &result, buffer);
+		log_cb(RETRO_LOG_ERROR, "Error(%i): %s \n", size, buffer);
+		free(buffer);
+	}	
+
+   glAttachShader(ChassisProgramID, frag);
+   glAttachShader(ChassisProgramID, vert);
+   glLinkProgram(ChassisProgramID);
+   
+	glGetProgramiv(ChassisProgramID, GL_LINK_STATUS, &result);
+	if (result == GL_TRUE ) log_cb(RETRO_LOG_INFO, "Chassis Shader Link successfull\n"); 
+	else 
+	{
+		log_cb(RETRO_LOG_ERROR, "Chassis Shader Link failed\n");
+
+		glGetProgramiv(ChassisProgramID, GL_INFO_LOG_LENGTH, &result);
+		int size = result;
+		char *buffer = malloc(size+1);
+		glGetProgramInfoLog(ChassisProgramID, result, &result, buffer);
+		log_cb(RETRO_LOG_ERROR, "Error(%i): %s \n", size, buffer);
+		free(buffer);
+	}	
+
+	glGetProgramiv(ChassisProgramID, GL_VALIDATE_STATUS, &result);
+	if (result == GL_TRUE ) log_cb(RETRO_LOG_INFO, "Chassis Program validation successfull\n"); 
+	else
+	{
+		log_cb(RETRO_LOG_ERROR, "Chassis Program validation failed\n");
+
+		glGetProgramiv(ChassisProgramID, GL_INFO_LOG_LENGTH, &result);
+		int size = result;
+		char *buffer = malloc(size+1);
+		glGetProgramInfoLog(ChassisProgramID, result, &result, buffer);
+		log_cb(RETRO_LOG_ERROR, "Error(%i): %s \n", size, buffer);
+		free(buffer);
+	}	
+
+
+}
+
+static unsigned tgl2_get_alignment(unsigned pitch)
+{
+   if (pitch & 1)
+      return 1;
+   if (pitch & 2)
+      return 2;
+   if (pitch & 4)
+      return 4;
+   return 8;
+}
+
+static void create_gl_image32(uint32_t width, uint32_t height, const uint32_t *data, GLuint *textureId)
+{
+   GLenum err;
+   glGenTextures(1, textureId);
+   if ((err = glGetError()))
+   {
+	  log_cb(RETRO_LOG_INFO, "Chassis Error generating GL texture: %x\n", err);
+   }
+   glBindTexture(GL_TEXTURE_2D, *textureId);
+
+   if ((err = glGetError()))
+   {
+	  log_cb(RETRO_LOG_INFO, "Chassis Error binding GL texture: %x\n", err);
+   }
+
+	unsigned alignment = tgl2_get_alignment(width * sizeof(uint32_t));
+    glPixelStorei(GL_UNPACK_ALIGNMENT, alignment); 
+
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+
+   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_INT_8_8_8_8_REV, data);
+// TODO
+   
+/*   
+   bool use_rgba    = video_driver_supports_rgba();
+   bool rgb32       = (base_size == (sizeof(uint32_t)));
+
+
+   glTexImage2D(GL_TEXTURE_2D,
+         0,
+         (use_rgba || !rgb32) ? GL_RGBA : RARCH_GL_INTERNAL_FORMAT32,
+         width, height, 0,
+         (use_rgba || !rgb32) ? GL_RGBA : RARCH_GL_TEXTURE_TYPE32,
+         (rgb32) ? RARCH_GL_FORMAT32 : GL_UNSIGNED_SHORT_4_4_4_4, frame);
+   
+*/   
+   
+   if ((err = glGetError()))
+   {
+      log_cb(RETRO_LOG_ERROR, "Error loading GL texture: %x\n", err);
+   }
+}
+//;------------------
+
+void loadChassis()
+{
+	if (!enableChassisDraw) return;
+	if (!alphaSupport) 
+	{
+		log_cb(RETRO_LOG_WARN, "Chassis Alpha = 0\n");
+		
+		return;
+	}
+    const char *systemDir = NULL;
+    environ_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &systemDir);
+	if (systemDir==NULL) 
+	{
+		log_cb(RETRO_LOG_ERROR, "Chassis Frontend did not give system path!\n");
+		enableChassisDraw = 0;
+		return;
+	}	
+
+	char sep;
+	char pathBuff[256];
+	char pathBuff2[256];
+	strcpy(pathBuff, systemDir);
+	strcpy(pathBuff2, "overlays\\VecX\\");
+
+	char *pos = strstr(pathBuff, "system");
+	if (pos == NULL) pos = strstr(pathBuff, "downloads");
+	if (pos == NULL) 
+	{
+		log_cb(RETRO_LOG_ERROR, "Chassis System path not recognized!\n");
+		enableChassisDraw = 0;
+		return;
+	}	
+	sep = *(pos-1);
+	*pos = 0;	
+
+	pathBuff2[8] = sep;
+	pathBuff2[13] = sep;
+	strcat(pathBuff, pathBuff2);
+	strcat(pathBuff, "screen.png");
+	log_cb(RETRO_LOG_INFO, "Chassis Overlay dir: %s\n", pathBuff);
+
+
+
+      struct texture_image image_tex; // from 
+      image_tex.supports_rgba = 1;//loader->driver_rgba_support;
+
+      if (image_texture_load(&image_tex, pathBuff))
+      {
+			log_cb(RETRO_LOG_INFO, "Chassis loaded!\n");
+			create_gl_image32(image_tex.width, image_tex.height, image_tex.pixels, &ChassisTextureID);
+			compile_chassis_gl_program();
+      }
+	  else
+	  {
+		log_cb(RETRO_LOG_ERROR, "Chassis not loaded!\n");
+		enableChassisDraw = 0;
+	  }
+	  chassisLoaded = 1;
+}
+
+#endif
+
 static void create_gl_image(
       uint32_t width, uint32_t height, const uint8_t *data, GLuint *textureId)
 {
    GLenum err;
    glGenTextures(1, textureId);
    if ((err = glGetError()))
+   {
       log_cb(RETRO_LOG_ERROR, "Error generating GL texture: %x\n", err);
+   }
    glBindTexture(GL_TEXTURE_2D, *textureId);
    if ((err = glGetError()))
+   {
       log_cb(RETRO_LOG_ERROR, "Error binding GL texture: %x\n", err);
+   }
 
    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-   glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, width, height, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, data);
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, width, height, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, data);
+   
    if ((err = glGetError()))
+   {
       log_cb(RETRO_LOG_ERROR, "Error loading GL texture: %x\n", err);
+   }
 }
 
 static void compile_gl_program(void)
 {
+	
+	
    const GLchar *vertexShaderSource[] = {
-      "attribute vec2 position;\n"
+         "attribute vec2 position;\n"
          "attribute vec2 offset;\n"
          "attribute float colour;\n"
          "attribute float packedTexCoords;\n"
@@ -273,15 +558,16 @@ static void compile_gl_program(void)
    ProgramID   = glCreateProgram();
    GLuint vert = glCreateShader(GL_VERTEX_SHADER);
    GLuint frag = glCreateShader(GL_FRAGMENT_SHADER);
-
    glShaderSource(vert, ARRAY_SIZE(vertexShaderSource), vertexShaderSource, 0);
    glShaderSource(frag, ARRAY_SIZE(fragmentShaderSource), fragmentShaderSource, 0);
+
    glCompileShader(vert);
    glCompileShader(frag);
-
    glAttachShader(ProgramID, vert);
    glAttachShader(ProgramID, frag);
+   
    glLinkProgram(ProgramID);
+
    glDeleteShader(vert);
    glDeleteShader(frag);
    mvpMatrixLocation             = glGetUniformLocation(ProgramID, "mvpMatrix");
@@ -302,12 +588,17 @@ static void context_reset(void)
    compile_gl_program();
    create_gl_image(DotWidth, DotHeight, DotImage, &DotTextureID);
    create_gl_image(BloomWidth, BloomHeight, BloomImage, &BloomTextureID);
+#ifdef DRAW_CHASSIS
+   loadChassis();
+#endif
+
 #if 0
    setup_vao();
 #endif
 #ifdef CORE
    context_alive = true;
 #endif
+	contextIsSet=1;
 }
 
 static void context_destroy(void)
@@ -317,6 +608,7 @@ static void context_destroy(void)
    vao           = 0;
    context_alive = false;
 #endif
+	contextIsSet=0;
 
    if (vbo)
    {
@@ -338,6 +630,18 @@ static void context_destroy(void)
       glDeleteProgram(ProgramID);
       ProgramID = 0;
    }
+#ifdef DRAW_CHASSIS
+   if (ChassisTextureID)
+   {
+      glDeleteTextures(1, &ChassisTextureID);
+      ChassisTextureID = 0;
+   }
+   if (ChassisProgramID)
+   {
+      glDeleteProgram(ChassisProgramID);
+      ChassisProgramID = 0;
+   }
+#endif   
 }
 
 #ifdef HAVE_OPENGLES
@@ -396,7 +700,6 @@ static bool retro_init_hw_context(bool useHardwareContext)
 }
 #endif
 #endif
-
 static bool set_rendering_context(bool useHardwareContext)
 {
 #ifdef HAS_GPU    
@@ -410,6 +713,7 @@ static bool set_rendering_context(bool useHardwareContext)
          environ_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt);
          return false;
       }
+	  alphaSupport = 1;
    }
    else
 #endif        
@@ -563,6 +867,53 @@ static void check_variables(void)
       }
    }
 
+  
+	var.value = NULL;
+	var.key = "vecx_overwrite_flash";
+	if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+	{
+	 int value = atoi(var.value);
+	 if (value != 0) value = 1;
+	 overwriteFlash = value;
+	}
+	var.value = NULL;
+	var.key = "vecx_autosync";
+	if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+	{
+	 int value = atoi(var.value);
+	 if (value != 0) value = 1;
+	 extern int config_autoSync; // from vecx
+	 config_autoSync = value;
+	}
+	var.value = NULL;
+	var.key = "vecx_dont_overdo_dots";
+	if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+	{
+	 int value = atoi(var.value);
+	 if (value != 0) value = 1;
+	 dontOverDoDots = value;
+	}
+#ifdef DRAW_CHASSIS
+
+	var.value = NULL;
+	var.key = "vecx_enable_chassis";
+	if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+	{
+	 int value = atoi(var.value);
+	 if (value != 0) value = 1;
+	 enableChassisDraw = value;
+	}
+	
+	if ((!chassisLoaded) && (enableChassisDraw) && (contextIsSet))
+		loadChassis();
+#endif
+
+   
+   float x = get_float_variable("vecx_drift_x", 0.09);
+   float y = get_float_variable("vecx_drift_y", -0.04);
+   extern void setDrift(double x, double y);
+   setDrift((double) x, (double) y);
+
    SCALEX = get_float_variable("vecx_scale_x", 1);
    SCALEY = get_float_variable("vecx_scale_y", 1);
    SHIFTX = 0.5*(1-SCALEX)+get_float_variable("vecx_shift_x", 0)/2.;
@@ -574,6 +925,8 @@ static void check_variables(void)
 
 static void fallback_log(enum retro_log_level level, const char *fmt, ...)
 {
+	va_list ap;
+	printf(fmt, ap);
 }
 
 void retro_init(void)
@@ -584,7 +937,7 @@ void retro_init(void)
       log_cb = log.log;
    else
       log_cb = fallback_log;
-
+   
    environ_cb(RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL, &level);
 
    check_variables();
@@ -605,7 +958,10 @@ bool retro_unserialize(const void *data, size_t size)
 	return vecx_deserialize((char*)data, size);
 }
 
-static unsigned char cart[65536];
+char *getMoviePath()
+{
+	return pathBuf;
+}
 
 bool retro_load_game(const struct retro_game_info *info)
 {
@@ -667,6 +1023,18 @@ bool retro_load_game(const struct retro_game_info *info)
    set_rendering_context(false);
 #endif
 
+	 if ((info->path != NULL) && (strlen(info->path)<255))
+	 {
+	   memset(orgNameBuf, '\0', 255);
+	   strcpy(orgNameBuf, info->path);
+
+	   memset(_pathBuf, '\0', 255);
+	   strcpy(_pathBuf, info->path);
+	   path_remove_extension(_pathBuf);
+	   fill_pathname(_pathBuf, info->path, ".vvm", 255);
+	   pathBuf = _pathBuf;
+	 }
+
    environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, desc);
 
    e8910_init_sound();
@@ -676,15 +1044,20 @@ bool retro_load_game(const struct retro_game_info *info)
    memcpy(rom, bios_data, bios_data_size);
 
    /* just memcpy buffer, ROMs are so tiny on Vectrex */
-   cart_sz = sizeof(cart) / sizeof(cart[0]);
+    cart_sz = sizeof(cart) / sizeof(cart[0]);
+	cartsizeInBytes = cart_sz;
 
    if (info->data && info->size > 0 && info->size <= cart_sz)
    {
       int b;
-      memset(cart, 0, cart_sz);
+      memset(cart, 1, cart_sz); // due to vectrex idiosyncracy - lets take 1 here!
       memcpy(cart, info->data, info->size);
+	  
       for(b = 0; b < sizeof(cart); b++)
+	  {
          set_cart(b, cart[b]);
+	  }
+      set_cartSize(info->size);
 
       vecx_reset();
       e8910_init_sound();
@@ -698,10 +1071,39 @@ bool retro_load_game(const struct retro_game_info *info)
 void retro_unload_game(void)
 {
    int b;
+   extern int flashcartChanged;
+
+   if ((flashcartChanged) && (overwriteFlash))
+   {
+		if ((pathBuf != NULL) && (cartsizeInBytes!= 0))
+		{
+			extern unsigned char *getCart();
+			unsigned char *changedCart = getCart();
+			
+			char flashNameBuf[255];
+			path_remove_extension(_pathBuf);
+			fill_pathname(flashNameBuf, _pathBuf, "_SAV.bin", 255);
+			FILE *flashFile = NULL;
+			flashFile = fopen(flashNameBuf, "wb");
+			int c = fwrite(changedCart, 1, cartsizeInBytes, flashFile);
+			fclose(flashFile);
+
+			if (c==cartsizeInBytes)
+			{
+				remove(orgNameBuf);
+				rename(flashNameBuf, orgNameBuf);
+			}
+		}
+   }
+
    memset(cart, 0, sizeof(cart) / sizeof(cart[0]));
    for(b = 0; b < sizeof(cart); b++)
       set_cart(b, 0);
    vecx_reset();
+	if (movieBuffer != NULL)
+	{
+		free(movieBuffer);
+	}
 }
 
 void retro_reset(void)
@@ -839,6 +1241,9 @@ static void intersection_point(VECX_POINT *res,
 
 void osint_render(void)
 {
+	// printf("Vectors: %ld\n", vector_draw_cnt);
+	
+	
 #ifdef HAS_GPU    
    if (!usingHWContext)
 #endif        
@@ -853,13 +1258,15 @@ void osint_render(void)
          unsigned x0, x1, y0, y1;
          unsigned char intensity = vectors_draw[i].color;
 
-         if (intensity == 128)
+         if ((intensity &0x80) == 0x80)
             continue;
 
          x0 = ((float)vectors_draw[i].x0 / (float)ALG_MAX_X * SCALEX + SHIFTX) * (float)WIDTH;
          x1 = ((float)vectors_draw[i].x1 / (float)ALG_MAX_X * SCALEX + SHIFTX) * (float)WIDTH;
          y0 = ((float)vectors_draw[i].y0 / (float)ALG_MAX_Y * SCALEY + SHIFTY) * (float)HEIGHT;
          y1 = ((float)vectors_draw[i].y1 / (float)ALG_MAX_Y * SCALEY + SHIFTY) * (float)HEIGHT;
+// todo use vector speed to 
+// alter brightness slightly!
 
          if (x0 - x1 == 0 && y0 - y1 == 0)
             draw_point(x0, y0, RGB1555(intensity));
@@ -870,6 +1277,8 @@ void osint_render(void)
 #ifdef HAS_GPU    
    else
    {
+// todo use vector speed to 
+// alter brightness slightly!
       int i;
       GLint num_verts = 0;
       int continuing = 0;
@@ -900,7 +1309,40 @@ void osint_render(void)
       glClearColor(0.0f, 0.0f, 0.0f, 1.0f-maxAlpha);
 
       glClear(GL_COLOR_BUFFER_BIT);
-      glEnable(GL_BLEND);
+	  glEnable(GL_BLEND);
+
+/* To Try	  
+                gl2.glEnable(GL2.GL_BLEND);
+                gl2.glBlendFunc(GL2.GL_SRC_ALPHA, GL2.GL_ONE_MINUS_SRC_ALPHA);            
+
+                gl2.glEnable(GL2.GL_POLYGON_SMOOTH);
+                gl2.glHint(GL2.GL_POLYGON_SMOOTH_HINT, GL2.GL_NICEST);
+
+                gl2.glEnable(GL2.GL_LINE_SMOOTH);
+                gl2.glHint(GL2.GL_LINE_SMOOTH_HINT, GL2.GL_NICEST);
+
+
+            glDisable(GL_MULTISAMPLE);
+            glDisable(GL_DITHER);
+            glDisable(GL_BLEND);
+
+            glHint(GL_POLYGON_SMOOTH_HINT, GL2.GL_FASTEST);
+            glDisable(GL_POLYGON_SMOOTH);
+
+            glHint(GL_LINE_SMOOTH_HINT, GL2.GL_FASTEST);
+            glDisable(GL_LINE_SMOOTH);
+
+            glHint(GL_POINT_SMOOTH_HINT, GL2.GL_FASTEST);
+            glDisable(GL_POINT_SMOOTH);
+*/	  
+	  
+	  
+	  
+
+
+
+
+
 
       glUseProgram(ProgramID);
       glUniformMatrix4fv(mvpMatrixLocation, 1, GL_FALSE, mvp_matrix);
@@ -913,11 +1355,15 @@ void osint_render(void)
       glVertexAttribPointer(packedTexCoordsAttribLocation, 1, GL_UNSIGNED_BYTE, GL_FALSE, sizeof(GLVERTEX), &(vertices[0].packedTexCoords));
       glEnableVertexAttribArray(packedTexCoordsAttribLocation);
 
+
+
       for (i = 0; i < vector_draw_cnt; i++)
       {
          colour = vectors_draw[i].color;
          if (colour == 0 || colour > 127)
             continue;
+		 int tcolour = colour;
+		 if (dontOverDoDots) tcolour = 0;
 
          /* Is this vector a point? */
          if (vectors_draw[i].x0 == vectors_draw[i].x1 && vectors_draw[i].y0 == vectors_draw[i].y1
@@ -954,28 +1400,28 @@ void osint_render(void)
          /* Draw end cap if we are not continuing the line */
          if (!continuing)
          {
-            dx = vectors_draw[i].x1 - vectors_draw[i].x0;
-            dy = vectors_draw[i].y1 - vectors_draw[i].y0; 
-            float length = sqrt(dx*dx+dy*dy);
-            dx /= length;
-            dy /= length;
+			dx = vectors_draw[i].x1 - vectors_draw[i].x0;
+			dy = vectors_draw[i].y1 - vectors_draw[i].y0; 
+			float length = sqrt(dx*dx+dy*dy);
+			dx /= length;
+			dy /= length;
 
-            vertices[num_verts].pos = vectors_draw[i].x0 | vectors_draw[i].y0 << 16;
-            vertices[num_verts].rest = make_all((-dy-dx), (dx-dy), colour, 0x20);
-            num_verts++;
-            vertices[num_verts].pos = vectors_draw[i].x0 | vectors_draw[i].y0 << 16;
-            vertices[num_verts].rest = make_all((dy-dx), (-dx-dy), colour, 0x22);
-            num_verts++;
-            vertices[num_verts].pos = vectors_draw[i].x0 | vectors_draw[i].y0 << 16;
-            vertices[num_verts].rest = make_all(-dy, dx, colour, 0x10);
-            num_verts++;
-            vertices[num_verts] = vertices[num_verts-2];
-            num_verts++;
-            vertices[num_verts] = vertices[num_verts-2];
-            num_verts++;
-            vertices[num_verts].pos = vectors_draw[i].x0 | vectors_draw[i].y0 << 16;
-            vertices[num_verts].rest = make_all(dy, -dx, colour, 0x12);
-            num_verts++;
+			vertices[num_verts].pos = vectors_draw[i].x0 | vectors_draw[i].y0 << 16;
+			vertices[num_verts].rest = make_all((-dy-dx), (dx-dy), tcolour, 0x20);
+			num_verts++;
+			vertices[num_verts].pos = vectors_draw[i].x0 | vectors_draw[i].y0 << 16;
+			vertices[num_verts].rest = make_all((dy-dx), (-dx-dy), tcolour, 0x22);
+			num_verts++;
+			vertices[num_verts].pos = vectors_draw[i].x0 | vectors_draw[i].y0 << 16;
+			vertices[num_verts].rest = make_all(-dy, dx, tcolour, 0x10);
+			num_verts++;
+			vertices[num_verts] = vertices[num_verts-2];
+			num_verts++;
+			vertices[num_verts] = vertices[num_verts-2];
+			num_verts++;
+			vertices[num_verts].pos = vectors_draw[i].x0 | vectors_draw[i].y0 << 16;
+			vertices[num_verts].rest = make_all(dy, -dx, tcolour, 0x12);
+			num_verts++;
          }
 
          float nextDx = dx;
@@ -1075,23 +1521,23 @@ void osint_render(void)
 
          if (!continuing)
          {
-            /* And now the end cap. */
-            vertices[num_verts]        = vertices[num_verts-2];
-            vertices[num_verts].colour = colour;
-            num_verts++;
-            vertices[num_verts]        = vertices[num_verts-2];
-            vertices[num_verts].colour = colour;
-            num_verts++;
-            vertices[num_verts].pos    = vectors_draw[i].x1 | vectors_draw[i].y1 << 16;
-            vertices[num_verts].rest   = make_all((-nextDy+nextDx), (nextDx+nextDy), colour, 0x00);
-            num_verts++;
-            vertices[num_verts]        = vertices[num_verts-2];
-            num_verts++;
-            vertices[num_verts]        = vertices[num_verts-2];
-            num_verts++;
-            vertices[num_verts].pos    = vectors_draw[i].x1 | vectors_draw[i].y1 << 16;
-            vertices[num_verts].rest   = make_all((nextDy+nextDx), (-nextDx+nextDy), colour, 0x02);
-            num_verts++;
+			/* And now the end cap. */
+			vertices[num_verts]        = vertices[num_verts-2];
+			vertices[num_verts].colour = tcolour;
+			num_verts++;
+			vertices[num_verts]        = vertices[num_verts-2];
+			vertices[num_verts].colour = tcolour;
+			num_verts++;
+			vertices[num_verts].pos    = vectors_draw[i].x1 | vectors_draw[i].y1 << 16;
+			vertices[num_verts].rest   = make_all((-nextDy+nextDx), (nextDx+nextDy), tcolour, 0x00);
+			num_verts++;
+			vertices[num_verts]        = vertices[num_verts-2];
+			num_verts++;
+			vertices[num_verts]        = vertices[num_verts-2];
+			num_verts++;
+			vertices[num_verts].pos    = vectors_draw[i].x1 | vectors_draw[i].y1 << 16;
+			vertices[num_verts].rest   = make_all((nextDy+nextDx), (-nextDx+nextDy), tcolour, 0x02);
+			num_verts++;
          }
       }
 
@@ -1126,6 +1572,56 @@ void osint_render(void)
 
       glUseProgram(0);
 
+#ifdef DRAW_CHASSIS
+		if ((ChassisTextureID != 0) && (enableChassisDraw))
+		{
+            glEnable(GL_BLEND);            
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+			
+            glLoadIdentity();
+            glEnable(GL_TEXTURE_2D);
+
+            glActiveTexture(GL_TEXTURE0 );
+            glBindTexture(GL_TEXTURE_2D, ChassisTextureID);
+
+			glUseProgram(ChassisProgramID);
+			GLuint i = glGetUniformLocation(ChassisProgramID, "screenTexture");
+			glUniform1i(i, 0); // use the first set texture
+			
+			i = glGetUniformLocation(ChassisProgramID, "screenBrightnessAdjust");
+			glUniform1f(i, (float) 0.3); // transparency of chassis
+			glBindFramebuffer(RARCH_GL_FRAMEBUFFER, hw_render.get_current_framebuffer());
+
+
+// TODO is this different with Android or OPENGLES?
+// Some one must check
+			int screenMustFlip = 1; // assuming GL Y is inverted
+            float y1 = screenMustFlip ? 1.0F : -1.0F;
+            float y2 = 1.0F - y1;
+            if (y1==1.0f) 
+				y2=-1.0f; 
+			else y2 =1.0f;
+
+            glBegin( GL_QUADS ); 
+            glTexCoord2f( 0.f, 0.f ); glVertex2f( -1.f, y1 ); 
+            glTexCoord2f( 1.f, 0.f ); glVertex2f( 1.0f, y1 ); 
+            glTexCoord2f( 1.f, 1.f ); glVertex2f( 1.0f, y2 ); 
+            glTexCoord2f( 0.f, 1.f ); glVertex2f( -1.f, y2 ); 
+            glEnd();
+           
+			// cleanup
+            glBindTexture( GL_TEXTURE_2D, 0 );
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glUseProgram(0);
+
+			glBlendFunc(GL_ONE, GL_ONE);
+            glDisable(GL_BLEND);  
+			
+		}
+#endif		
+      glEnable(GL_BLEND);
+
+
       /* Restore the old scissor box state. */
       if (scissorTestEnabled == GL_FALSE)
          glDisable(GL_SCISSOR_TEST);
@@ -1156,12 +1652,10 @@ void retro_run(void)
    poll_cb();
 
    /* Player 1 */
+   alg_jch0 = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X) / 256 + 127;
+   alg_jch1 = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y) / 256 + 127;
 
-
-   alg_jch0 = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X) / 256 + 128;
-   alg_jch1 = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y) / 256 + 128;
-
-   if (alg_jch0 == 128)
+   if (alg_jch0 == 127)
    {
       if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0,
                RETRO_DEVICE_ID_JOYPAD_LEFT))
@@ -1171,7 +1665,7 @@ void retro_run(void)
          alg_jch0 = 0xff;
    }
 
-   if (alg_jch1 == 128)
+   if (alg_jch1 == 127)
    {
       if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0,
                RETRO_DEVICE_ID_JOYPAD_UP))
@@ -1261,3 +1755,6 @@ void retro_run(void)
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &updated) && updated)
       check_variables();
 }
+
+
+

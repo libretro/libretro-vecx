@@ -5,8 +5,10 @@ enum {
 	VECTREX_MHZ		= 1500000, /* speed of the vectrex being emulated */
 	VECTREX_COLORS  = 128,     /* number of possible colors ... grayscale */
 
-	ALG_MAX_X		= 33000,
-	ALG_MAX_Y		= 41000
+//	ALG_MAX_X		= 33000,
+//	ALG_MAX_Y		= 41000
+	ALG_MAX_X		= 43000,
+	ALG_MAX_Y		= 45000
 };
 
 typedef struct vector_type {
@@ -17,11 +19,13 @@ typedef struct vector_type {
 	 * an invalid entry and must be ignored.
 	 */
 	unsigned char color;
+    int speed;
 } vector_t;
 
 extern unsigned char rom[8192];
 extern unsigned char get_cart(unsigned pos);
 extern void set_cart(unsigned pos, unsigned char data);
+extern void set_cartSize(int size);
 
 extern unsigned snd_regs[16];
 extern unsigned alg_jch0;
