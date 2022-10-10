@@ -290,6 +290,98 @@ struct retro_core_option_definition option_defs_us[] = {
       },
       "0"
    },
+   {
+       "vecx_overwrite_flash",
+       "Overwrite Flash cart",
+       "Saving data, overwriting bin file!",
+       {
+           { "0", NULL },
+           { "1", NULL },
+           { NULL, NULL }
+       },
+       "0"
+   },
+   {
+       "vecx_autosync",
+       "Auto Sync",
+       "Try to determine a good point to Draw",
+       {
+           { "0", NULL },
+           { "1", NULL },
+           { NULL, NULL }
+       },
+       "1"
+   },
+   {
+       "vecx_dont_overdo_dots",
+       "Reduce line end dot drawing",
+       "Less dotty",
+       {
+           { "0", NULL },
+           { "1", NULL },
+           { NULL, NULL }
+       },
+       "1"
+   },
+   {
+       "vecx_enable_chassis",
+       "Enable chassis draw",
+       "Chasis",
+       {
+           { "0", NULL },
+           { "1", NULL },
+           { NULL, NULL }
+       },
+       "1"
+   },
+   {
+       "vecx_drift_x",
+       "horizontal Drift",
+       "Nearer zero -> less drift",
+       {
+         { "-0.14",   NULL },
+         { "-0.12",   NULL },
+         { "-0.10",   NULL },
+         { "-0.08",   NULL },
+         { "-0.06",   NULL },
+         { "-0.04",   NULL },
+         { "-0.02",   NULL },
+         { "0",   NULL },
+         { "0.02",   NULL },
+         { "0.04",   NULL },
+         { "0.06",   NULL },
+         { "0.08",   NULL },
+         { "0.10",   NULL },
+         { "0.12",   NULL },
+         { "0.14",   NULL },
+           { NULL, NULL }
+       },
+       "0.08"
+   },
+   {
+       "vecx_drift_y",
+       "vertical Drift",
+       "Nearer zero -> less drift",
+       {
+         { "-0.14",   NULL },
+         { "-0.12",   NULL },
+         { "-0.10",   NULL },
+         { "-0.08",   NULL },
+         { "-0.06",   NULL },
+         { "-0.04",   NULL },
+         { "-0.02",   NULL },
+         { "0",   NULL },
+         { "0.02",   NULL },
+         { "0.04",   NULL },
+         { "0.06",   NULL },
+         { "0.08",   NULL },
+         { "0.10",   NULL },
+         { "0.12",   NULL },
+         { "0.14",   NULL },
+           { NULL, NULL }
+       },
+       "-0.04"
+   },
    { NULL, NULL, NULL, {{0}}, NULL },
 };
 

@@ -47,6 +47,11 @@ int e8910_statesz(void)
 	return sizeof(unsigned) * (16 + 32 + 4) + sizeof(int) * 14 + 12;
 }
 
+static int SAMPLE_THRESHOLD = 25;
+static int digitByteCounter =0;       
+#define MAX_DIGIT_BUFFER 10000
+static int digitByte[MAX_DIGIT_BUFFER];
+
 void e8910_serialize(char* dst)
 {
 	memcpy(dst, &PSG.VolTable, sizeof(PSG.VolTable)); dst += sizeof(PSG.VolTable);
@@ -140,9 +145,43 @@ void e8910_deserialize ( char* dst )
 #define AY_PORTA	(14)
 #define AY_PORTB	(15)
 
+
+int reg14In = 0xff;
+int reg14Out = 0xff;
+
+// this should read joystick button values - 
+// dummy for now!
+int e8910_read(int reg)
+{
+	if (reg != 14) return snd_regs[reg];
+	// readDataToPSGFromPortA();
+
+	if  ((snd_regs[AY_ENABLE] & 0x40 ) ==  0x00)
+	{
+		// input mode
+		return reg14In;//snd_regs[14];
+	}
+	// output mode
+    return reg14In;//snd_regs[14];
+	
+}
 void e8910_write(int r, int v)
 {
     int old;
+
+	// 255 dummy register for "path thru data to sound direct
+	if ((r != 255) && (digitByteCounter != 0))
+	{
+		digitByteCounter = 0; // counter 0 == NO digitizing active
+	}
+	if (r == 255)
+	{
+		// sound sample is active
+		if (digitByteCounter>=MAX_DIGIT_BUFFER) return;
+		if (digitByteCounter==-1) digitByteCounter =0; // -1 means digitizing active, but buffer was reset
+		digitByte[digitByteCounter++] = v;
+		return;
+	}
 
     snd_regs[r] = v;
 
@@ -279,6 +318,7 @@ void
 e8910_callback(void *userdata, uint8_t *stream, int length)
 {
 	int outn;
+    int lengthOrg = length;
 	uint8_t* buf1 = stream;
 
 	(void) userdata;
@@ -539,6 +579,49 @@ e8910_callback(void *userdata, uint8_t *stream, int length)
     vol = (vola * PSG.VolA + volb * PSG.VolB + volc * PSG.VolC) / (3 * STEP);
     if (--length & 1) *(buf1++) = vol >> 8;
 	}
+
+
+
+
+
+
+
+	
+	// small sample counts are ignored!
+	if ((digitByteCounter>SAMPLE_THRESHOLD) ) // are there any samples?
+	{
+		double sampleScale = ((double)digitByteCounter) / ((double) lengthOrg);
+		int i=0;
+		// we fill the needed sample buffer
+		// with as many samples as we have
+		// each sample may be "stretched" to fill the buffer
+		// it is NOT considered how long (in cycles) a sample "stayed" for digital output
+		// all samples are considered to have the same "length"
+		double sampleCounter = 0;
+
+		// samples come from the DAC (more or less)
+		// therefor samples are signed 8bit samples, -128 - +127
+		// output line is done in signed 8bit samples (PSG has signed output) [although the output is allways positive]
+		// and our data here is ORer with
+		// PSG out
+		double volDigital = 0.1;
+		while (i<lengthOrg) 
+		{
+			double signed8BitSampleVolumne = digitByte[(int)sampleCounter]*volDigital;
+			unsigned char sampleValueVolumne8BitSigned = (unsigned char)(( ((unsigned char ) signed8BitSampleVolumne)) & 0xff); // UNSIGNED
+			sampleCounter += sampleScale;
+			
+			// for now a sample just overwrites PSG
+			stream[i] = sampleValueVolumne8BitSigned;
+			i++;
+		}
+	}
+	digitByteCounter = -1;
+
+
+
+
+
 }
 
 

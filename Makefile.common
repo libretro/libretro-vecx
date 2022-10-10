@@ -1,8 +1,10 @@
 LIBRETRO_COMM_DIR := $(CORE_DIR)/libretro-common
+LIBRETRO_PNG_DIR  := $(LIBRETRO_COMM_DIR)/formats/png
+
 INCFLAGS     := -I$(CORE_DIR) \
                 -I$(LIBRETRO_COMM_DIR)/include
 
-COREDEFINES   = -D__LIBRETRO__ -DHAVE_STRINGS_H -DHAVE_STDINT_H -DHAVE_INTTYPES_H 
+COREDEFINES   = -D__LIBRETRO__ -DHAVE_STRINGS_H -DHAVE_STDINT_H -DHAVE_INTTYPES_H -DHAVE_ZLIB -DHAVE_RPNG
 
 ifneq (,$(findstring msvc2003,$(platform)))
    INCFLAGS += -I$(LIBRETRO_COMM_DIR)/include/compat/msvc
@@ -18,9 +20,42 @@ ifeq ($(HAS_GPU), 1)
 	COREDEFINES += -DHAS_GPU
 endif
 
+LDFLAGS += -lz
+
+
 SOURCES_C  := $(CORE_DIR)/e6809.c \
               $(CORE_DIR)/e8910.c \
               $(CORE_DIR)/libretro.c \
+			  $(LIBRETRO_PNG_DIR)/rpng.c \
+			  $(LIBRETRO_PNG_DIR)/rpng_encode.c \
+              $(LIBRETRO_COMM_DIR)/formats/image_texture.c \
+              $(LIBRETRO_COMM_DIR)/formats/image_transfer.c \
+              $(LIBRETRO_COMM_DIR)/file/file_path.c \
+              $(LIBRETRO_COMM_DIR)/compat/compat_strl.c \
+              $(LIBRETRO_COMM_DIR)/time/rtime.c \
+              $(LIBRETRO_COMM_DIR)/string/stdstring.c \
+              $(LIBRETRO_COMM_DIR)/encodings/encoding_utf.c \
+  			  $(LIBRETRO_COMM_DIR)/encodings/encoding_crc32.c \
+			  $(LIBRETRO_COMM_DIR)/compat/fopen_utf8.c \
+			  $(LIBRETRO_COMM_DIR)/compat/compat_posix_string.c \
+			  $(LIBRETRO_COMM_DIR)/compat/compat_strcasestr.c \
+			  $(LIBRETRO_COMM_DIR)/file/nbio/nbio_intf.c \
+			  $(LIBRETRO_COMM_DIR)/file/nbio/nbio_stdio.c \
+			  $(LIBRETRO_COMM_DIR)/file/nbio/nbio_linux.c \
+			  $(LIBRETRO_COMM_DIR)/file/nbio/nbio_unixmmap.c \
+			  $(LIBRETRO_COMM_DIR)/file/nbio/nbio_windowsmmap.c \
+			  $(LIBRETRO_COMM_DIR)/file/archive_file.c \
+			  $(LIBRETRO_COMM_DIR)/file/archive_file_zlib.c \
+			  $(LIBRETRO_COMM_DIR)/file/file_path_io.c \
+			  $(LIBRETRO_COMM_DIR)/streams/file_stream.c \
+			  $(LIBRETRO_COMM_DIR)/vfs/vfs_implementation.c \
+			  $(LIBRETRO_COMM_DIR)/streams/interface_stream.c \
+			  $(LIBRETRO_COMM_DIR)/streams/memory_stream.c \
+			  $(LIBRETRO_COMM_DIR)/streams/trans_stream.c \
+			  $(LIBRETRO_COMM_DIR)/streams/rzip_stream.c \
+			  $(LIBRETRO_COMM_DIR)/streams/trans_stream_zlib.c \
+			  $(LIBRETRO_COMM_DIR)/streams/trans_stream_pipe.c \
+			  $(LIBRETRO_COMM_DIR)/lists/string_list.c \
               $(CORE_DIR)/vecx.c
 
 ifeq ($(HAS_GPU), 1)
