@@ -1,10 +1,11 @@
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "e6809.h"
 #include "vecx.h"
+#include "vecx_psg.h"
 #include "osint.h"
-#include "e8910.h"
 
 #define einline __inline
 
@@ -14,6 +15,8 @@
 #define BS_3 3
 #define BS_4 4
 #define BS_5 5
+
+static int16_t *dacbuf = NULL;
 
 enum
 {
@@ -110,8 +113,14 @@ static long vector_hash[VECTOR_HASH];
 
 static long fcycles;
 
-static unsigned snd_select;
-unsigned snd_regs[16];
+static unsigned dacsamps = 0;
+static unsigned dacset = 0;
+static unsigned psgsamps = 0;
+static unsigned psgcycs = 0;
+
+void vecx_dac_set_buffer(int16_t *buffer) {
+    dacbuf = buffer;
+}
 
 unsigned char get_cart(unsigned pos)
 {
@@ -128,7 +137,7 @@ void set_cart(unsigned pos, unsigned char data)
 int vecx_statesz(void)
 {
    return 1025 + (sizeof(unsigned) * 37) + (sizeof(long) * 12) +
-      e6809_statesz() + e8910_statesz();
+      e6809_statesz() + 58;
 }
 
 /* hide all the ugly at the bottom.
@@ -136,19 +145,44 @@ int vecx_statesz(void)
  * along with the usual reinventing of C99 stdint */
 int vecx_serialize(char* dst, int size)
 {
+   int i = 0;
+   psg_t psg_st = {0};
+
    if (size < vecx_statesz())
       return 0;
 
    e6809_serialize(dst);
    dst += e6809_statesz();
-   e8910_serialize(dst);
-   dst += e8910_statesz();
+
+   // PSG
+   vecx_psg_state_save(&psg_st);
+
+   for (i = 0; i < 16; ++i) {
+      memcpy(dst, &psg_st.reg[i], sizeof(uint16_t)); dst+= sizeof(uint16_t);
+   }
+
+   for (i = 0; i < 3; ++i) {
+      memcpy(dst, &psg_st.tperiod[i], sizeof(uint16_t)); dst+= sizeof(uint16_t);
+      memcpy(dst, &psg_st.tcounter[i], sizeof(uint16_t)); dst+= sizeof(uint16_t);
+      memcpy(dst, &psg_st.amplitude[i], sizeof(uint8_t)); dst+= sizeof(uint8_t);
+      memcpy(dst, &psg_st.tdisable[i], sizeof(uint8_t)); dst+= sizeof(uint8_t);
+      memcpy(dst, &psg_st.ndisable[i], sizeof(uint8_t)); dst+= sizeof(uint8_t);
+      memcpy(dst, &psg_st.emode[i], sizeof(uint8_t)); dst+= sizeof(uint8_t);
+      memcpy(dst, &psg_st.sign[i], sizeof(uint8_t)); dst+= sizeof(uint8_t);
+   }
+
+   memcpy(dst, &psg_st.nperiod, sizeof(uint8_t)); dst+= sizeof(uint8_t);
+   memcpy(dst, &psg_st.ncounter, sizeof(uint16_t)); dst+= sizeof(uint16_t);
+   memcpy(dst, &psg_st.nshift, sizeof(uint8_t)); dst+= sizeof(uint8_t);
+   memcpy(dst, &psg_st.eperiod, sizeof(uint16_t)); dst+= sizeof(uint16_t);
+   memcpy(dst, &psg_st.ecounter, sizeof(uint16_t)); dst+= sizeof(uint16_t);
+   memcpy(dst, &psg_st.eseg, sizeof(uint8_t)); dst+= sizeof(uint8_t);
+   memcpy(dst, &psg_st.estep, sizeof(uint8_t)); dst+= sizeof(uint8_t);
+   memcpy(dst, &psg_st.evol, sizeof(uint8_t)); dst+= sizeof(uint8_t);
 
    memcpy(dst, vecx_ram, 1024);
    dst += 1024;
 
-   memcpy(dst, &snd_select, sizeof(int));
-   dst += sizeof(int); 
    memcpy(dst, &via_ora,    sizeof(int));
    dst += sizeof(int);
    memcpy(dst, &via_orb,    sizeof(int));
@@ -211,19 +245,43 @@ int vecx_serialize(char* dst, int size)
 
 int vecx_deserialize(char* dst, int size)
 {
+   int i = 0;
+   psg_t psg_st = {0};
+
    if (size < vecx_statesz())
       return 0;
 
    e6809_deserialize(dst);
    dst += e6809_statesz();
-   e8910_deserialize(dst);
-   dst += e8910_statesz();
+
+   // PSG
+   for (i = 0; i < 16; ++i) {
+      memcpy(&psg_st.reg[i], dst, sizeof(uint16_t)); dst+= sizeof(uint16_t);
+   }
+
+   for (i = 0; i < 3; ++i) {
+      memcpy(&psg_st.tperiod[i], dst, sizeof(uint16_t)); dst+= sizeof(uint16_t);
+      memcpy(&psg_st.tcounter[i], dst, sizeof(uint16_t)); dst+= sizeof(uint16_t);
+      memcpy(&psg_st.amplitude[i], dst, sizeof(uint8_t)); dst+= sizeof(uint8_t);
+      memcpy(&psg_st.tdisable[i], dst, sizeof(uint8_t)); dst+= sizeof(uint8_t);
+      memcpy(&psg_st.ndisable[i], dst, sizeof(uint8_t)); dst+= sizeof(uint8_t);
+      memcpy(&psg_st.emode[i], dst, sizeof(uint8_t)); dst+= sizeof(uint8_t);
+      memcpy(&psg_st.sign[i], dst, sizeof(uint8_t)); dst+= sizeof(uint8_t);
+   }
+
+   memcpy(&psg_st.nperiod, dst, sizeof(uint8_t)); dst+= sizeof(uint8_t);
+   memcpy(&psg_st.ncounter, dst, sizeof(uint16_t)); dst+= sizeof(uint16_t);
+   memcpy(&psg_st.nshift, dst, sizeof(uint8_t)); dst+= sizeof(uint8_t);
+   memcpy(&psg_st.eperiod, dst, sizeof(uint16_t)); dst+= sizeof(uint16_t);
+   memcpy(&psg_st.ecounter, dst, sizeof(uint16_t)); dst+= sizeof(uint16_t);
+   memcpy(&psg_st.eseg, dst, sizeof(uint8_t)); dst+= sizeof(uint8_t);
+   memcpy(&psg_st.estep, dst, sizeof(uint8_t)); dst+= sizeof(uint8_t);
+   memcpy(&psg_st.evol, dst, sizeof(uint8_t)); dst+= sizeof(uint8_t);
+   vecx_psg_state_load(&psg_st);
 
    memcpy(vecx_ram, dst, 1024);
    dst += 1024;
 
-   memcpy(&snd_select,dst,  sizeof(int));
-   dst += sizeof(int);
    memcpy(&via_ora,   dst,  sizeof(int));
    dst += sizeof(int);
    memcpy(&via_orb,   dst,  sizeof(int)); dst += sizeof(int);
@@ -291,19 +349,13 @@ static einline void snd_update(void)
          break;
       case 0x10:
          /* the sound chip is recieving data */
-         if (snd_select != 14)
-         {
-            snd_regs[snd_select] = via_ora;
-            e8910_write(snd_select, via_ora);
-         }
-
+         if (vecx_psg_get_reg() != 14)
+            vecx_psg_wr(via_ora);
          break;
       case 0x18:
          /* the sound chip is latching an address */
-
-         if ((via_ora & 0xf0) == 0x00)
-            snd_select = via_ora & 0x0f;
-
+        if ((via_ora & 0xf0) == 0x00)
+           vecx_psg_set_reg(via_ora & 0x0f);
          break;
    }
 }
@@ -349,6 +401,9 @@ static einline void alg_update (void)
          alg_jsh = alg_jch3;
          break;
    }
+
+   if ((via_orb & 0x07) == 0x06)
+      dacset = 1;
 
    /* compare the current joystick direction with a reference */
 
@@ -418,7 +473,7 @@ unsigned char read8 (unsigned address)
             case 0xf:
                /* the snd chip is driving port a */
                if ((via_orb & 0x18) == 0x08)
-                  data = (unsigned char) snd_regs[snd_select];
+                  data = vecx_psg_rd();
                else
                   data = (unsigned char) via_ora;
 
@@ -724,19 +779,6 @@ void vecx_reset (void)
 	for (r = 0; r < 1024; r++)
 		vecx_ram[r] = r & 0xff;
 
-	for (r = 0; r < 16; r++)
-   {
-		snd_regs[r] = 0;
-		e8910_write(r, 0);
-	}
-
-	/* input buttons */
-
-	snd_regs[14] = 0xff;
-	e8910_write(14, 0xff);
-
-	snd_select = 0;
-
 	via_ora = 0;
 	via_orb = 0;
 	via_ddra = 0;
@@ -793,6 +835,7 @@ void vecx_reset (void)
 	e6809_write8 = write8;
 
 	e6809_reset ();
+    vecx_psg_init();
 }
 
 /* perform a single cycle worth of via emulation.
@@ -1141,8 +1184,19 @@ int vecx_emu (long cycles)
    {
       icycles = e6809_sstep (via_ifr & 0x80, 0);
 
+
       for (c = 0; c < icycles; c++)
       {
+         if (++psgcycs % 8 == 0) {
+            // Output DAC samples
+            dacbuf[dacsamps++] = (dacset ? (int16_t)(via_ora << 8) : 0);
+            dacset = 0;
+
+            // Output PSG samples
+            psgsamps += vecx_psg_exec();
+            psgcycs = 0;
+         }
+
          via_sstep0 ();
          alg_sstep ();
          via_sstep1 ();
@@ -1172,5 +1226,12 @@ int vecx_emu (long cycles)
          vectors_draw = tmp;
       }
    }
+
+   vecx_snd_push(psgsamps);
+   vecx_psg_reset_buffer();
+
+   psgsamps = 0;
+   dacsamps = 0;
+
    return ret;
 }

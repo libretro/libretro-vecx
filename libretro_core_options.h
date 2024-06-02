@@ -87,6 +87,17 @@ struct retro_core_option_definition option_defs_us[] = {
            { "7", NULL },
            { "8", NULL },
            { "9", NULL },
+           { "10", NULL },
+           { "11", NULL },
+           { "12", NULL },
+           { "13", NULL },
+           { "14", NULL },
+           { "15", NULL },
+           { "16", NULL },
+           { "17", NULL },
+           { "18", NULL },
+           { "19", NULL },
+           { "20", NULL },
            { NULL, NULL }
        },
        "4"
@@ -108,6 +119,22 @@ struct retro_core_option_definition option_defs_us[] = {
            { NULL, NULL }
        },
        "4"
+   },
+   {
+       "vecx_line_color",
+       "Line color",
+       "Color of the line.",
+       {
+           { "White", NULL },
+           { "Green", NULL },
+           { "Cyan", NULL },
+           { "Yellow", NULL },
+           { "Magenta", NULL },
+           { "Red", NULL },
+           { "Blue", NULL },
+           { NULL, NULL }
+       },
+       "White"
    },
    {
        "vecx_bloom_brightness",

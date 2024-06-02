@@ -6,7 +6,7 @@
 
 #include "osint.h"
 #include "vecx.h"
-#include "e8910.h"
+#include "vecx_psg.h"
 #include "e6809.h"
 #include "libretro.h"
 #include "libretro_core_options.h"
@@ -62,11 +62,18 @@ static struct retro_hw_render_callback hw_render;
 #define BUFSZ 2164800
 #endif
 
+#define SAMPLERATE_PSG 187500
+#define SIZE_ABUF 3800
+static int16_t psgbuf[SIZE_ABUF];
+static int16_t dacbuf[SIZE_ABUF];
+static int16_t outbuf[SIZE_ABUF << 1];
+
 static retro_video_refresh_t video_cb;
 static retro_input_poll_t poll_cb;
 static retro_input_state_t input_state_cb;
 static retro_environment_t environ_cb;
 static retro_audio_sample_t audio_cb;
+static retro_audio_sample_batch_t audio_batch_cb;
 
 static unsigned char point_size;
 static unsigned short framebuffer[BUFSZ];
@@ -83,6 +90,7 @@ static GLuint packedTexCoordsAttribLocation;
 static GLuint textureLocation;
 static GLuint scaleLocation;
 static GLuint brightnessLocation;
+static GLuint pseudoColorLocation;
 static GLuint DotTextureID;
 static GLuint BloomTextureID;
 static GLuint vbo;
@@ -112,6 +120,7 @@ static float lineBrightness        = 216.0f;
 static float bloomWidthMultiplier  = 8.0f;
 static float maxAlpha              = 0.2f;
 static const float bloomBrightness = 200.0f;
+static GLfloat pseudoColor[] = {1.0f, 1.0f, 1.0f, 1.0f};
 
 typedef struct
 {
@@ -126,7 +135,6 @@ extern unsigned char vecx_ram[1024];
 void retro_set_controller_port_device(unsigned port, unsigned device) {}
 void retro_cheat_reset(void) {}
 void retro_cheat_set(unsigned index, bool enabled, const char *code){}
-void retro_set_audio_sample_batch(retro_audio_sample_batch_t cb) {}
 unsigned retro_get_region(void) { return RETRO_REGION_PAL; }
 unsigned retro_api_version(void) { return RETRO_API_VERSION; }
 bool retro_load_game_special(unsigned game_type, const struct retro_game_info *info, size_t num_info) { return false; }
@@ -157,6 +165,7 @@ void retro_set_video_refresh(retro_video_refresh_t cb) { video_cb = cb; }
 void retro_set_audio_sample(retro_audio_sample_t cb)   { audio_cb = cb; }
 void retro_set_input_poll(retro_input_poll_t cb)       { poll_cb = cb; }
 void retro_set_input_state(retro_input_state_t cb)     { input_state_cb = cb; }
+void retro_set_audio_sample_batch(retro_audio_sample_batch_t cb) { audio_batch_cb = cb; }
 
 void retro_get_system_info(struct retro_system_info *info)
 {
@@ -174,15 +183,15 @@ void retro_get_system_av_info(struct retro_system_av_info *info)
 {
    memset(info, 0, sizeof(*info));
    info->timing.fps            = 50.0;
-   info->timing.sample_rate    = 44100;
+   info->timing.sample_rate    = SAMPLERATE_PSG;
    info->geometry.base_width   = 330;
    info->geometry.base_height  = 410;
 #if defined(_3DS) || defined(RETROFW)
    info->geometry.max_width    = 330;
    info->geometry.max_height   = 410;
 #else
-   info->geometry.max_width    = 2048;
-   info->geometry.max_height   = 2048;
+   info->geometry.max_width    = HEIGHT;
+   info->geometry.max_height   = HEIGHT;
 #endif
 
    info->geometry.aspect_ratio = 33.0 / 41.0;
@@ -192,6 +201,14 @@ void retro_get_system_av_info(struct retro_system_av_info *info)
 #ifdef HAS_GPU
 #define POINT_NEAR (-1.0f)
 #define POINT_FAR  (1.0f)
+
+static void set_color(uint8_t r, uint8_t g, uint8_t b)
+{
+   pseudoColor[0] = (float)r / 255.f;
+   pseudoColor[1] = (float)g / 255.f;
+   pseudoColor[2] = (float)b / 255.f;
+   pseudoColor[3] = 1.0f;
+}
 
 static void make_mvp_matrix(float mvp_mat[16],
       float left, float bottom, float right, float top)
@@ -254,10 +271,11 @@ static void compile_gl_program(void)
          "}\n"
    };
    const char *fragmentShaderSource[] = {
-      "#ifdef GL_ES\n"
+         "#ifdef GL_ES\n"
          "precision mediump float;\n"
          "#endif\n"
          "uniform sampler2D texture;\n"
+         "uniform vec4 pseudoColor;\n"
 
          "varying float fragColour;\n"
          "varying vec2 fragTexCoords;\n"
@@ -265,6 +283,7 @@ static void compile_gl_program(void)
          "void main()\n"
          "{\n"
          "   vec4 colour = texture2D(texture, fragTexCoords).rgbr;\n"
+         "   colour *= pseudoColor;\n"
          "   colour *= fragColour;\n"
          "   gl_FragColor = colour;\n"
          "}\n"
@@ -288,6 +307,7 @@ static void compile_gl_program(void)
    textureLocation               = glGetUniformLocation(ProgramID, "texture");
    scaleLocation                 = glGetUniformLocation(ProgramID, "scale");
    brightnessLocation            = glGetUniformLocation(ProgramID, "brightness");
+   pseudoColorLocation           = glGetUniformLocation(ProgramID, "pseudoColor");
    positionAttribLocation        = glGetAttribLocation(ProgramID, "position");
    offsetAttribLocation          = glGetAttribLocation(ProgramID, "offset");
    colourAttribLocation          = glGetAttribLocation(ProgramID, "colour");
@@ -528,6 +548,40 @@ static void check_variables(void)
             value = 8;
          bloomWidthMultiplier = value;
       }
+
+      var.value = NULL;
+      var.key = "vecx_line_color";
+      if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+      {
+         if (strcmp(var.value, "White") == 0)
+         {
+            set_color(0xff, 0xff, 0xff);
+         }
+         else if (strcmp(var.value, "Green") == 0)
+         {
+            set_color(0x44, 0xff, 0x44);
+         }
+         else if (strcmp(var.value, "Cyan") == 0)
+         {
+            set_color(0x44, 0xff, 0xff);
+         }
+         else if (strcmp(var.value, "Yellow") == 0)
+         {
+            set_color(0xff, 0xff, 0x44);
+         }
+         else if (strcmp(var.value, "Magenta") == 0)
+         {
+            set_color(0xff, 0x44, 0xff);
+         }
+         else if (strcmp(var.value, "Red") == 0)
+         {
+            set_color(0xff, 0x44, 0x44);
+         }
+         else if (strcmp(var.value, "Blue") == 0)
+         {
+            set_color(0x44, 0x44, 0xff);
+         }
+      }
    }
    else
 #endif       
@@ -588,6 +642,9 @@ void retro_init(void)
    environ_cb(RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL, &level);
 
    check_variables();
+
+   vecx_psg_set_buffer(psgbuf);
+   vecx_dac_set_buffer(dacbuf);
 }
 
 size_t retro_serialize_size(void)
@@ -619,6 +676,8 @@ bool retro_load_game(const struct retro_game_info *info)
       { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A,     "1" },
       { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X,     "3" },
       { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_Y,     "4" },
+      { 0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X, "Analog X" },
+      { 0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y, "Analog Y" },
 
       { 1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT,  "Left" },
       { 1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP,    "Up" },
@@ -628,6 +687,8 @@ bool retro_load_game(const struct retro_game_info *info)
       { 1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A,     "1" },
       { 1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X,     "3" },
       { 1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_Y,     "4" },
+      { 1, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X, "Analog X" },
+      { 1, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y, "Analog Y" },
 
       { 0 }
    };
@@ -669,7 +730,6 @@ bool retro_load_game(const struct retro_game_info *info)
 
    environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, desc);
 
-   e8910_init_sound();
    memset(framebuffer, 0, sizeof(framebuffer));
 
    /* start with a fresh BIOS copy */
@@ -687,7 +747,6 @@ bool retro_load_game(const struct retro_game_info *info)
          set_cart(b, cart[b]);
 
       vecx_reset();
-      e8910_init_sound();
 
       return true;
    }
@@ -707,7 +766,6 @@ void retro_unload_game(void)
 void retro_reset(void)
 {
    vecx_reset();
-   e8910_init_sound();
 }
 
 static INLINE uint16_t RGB1555(int col)
@@ -921,9 +979,11 @@ void osint_render(void)
 
          /* Is this vector a point? */
          if (vectors_draw[i].x0 == vectors_draw[i].x1 && vectors_draw[i].y0 == vectors_draw[i].y1
-               /* That isn't joining two lines. */
-               && (vectors_draw[i].x0 != vectors_draw[i-1].x1 || vectors_draw[i].x1 != vectors_draw[i+1].x0 ||
-                  vectors_draw[i].y0 != vectors_draw[i-1].y1 || vectors_draw[i].y1 != vectors_draw[i+1].y0))
+             /* That isn't joining two lines. */
+             && (i == 0 ||
+                 vectors_draw[i].x0 != vectors_draw[i - 1].x1 || vectors_draw[i].y0 != vectors_draw[i - 1].y1 ||
+                 i == vector_draw_cnt - 1 ||
+                 vectors_draw[i].x1 != vectors_draw[i + 1].x0 || vectors_draw[i].y1 != vectors_draw[i + 1].y0))
 #if 0
             if (vectors_draw[i].p0 == vectors_draw[i].p1
                   && (vectors_draw[i].p0 != vectors_draw[i-1].p1 || vectors_draw[i].p1 != vectors_draw[i+1].p0))
@@ -1104,6 +1164,7 @@ void osint_render(void)
          glUniform1i(textureLocation, 0);
          glUniform1f(scaleLocation, lineWidth * bloomWidthMultiplier);
          glUniform1f(brightnessLocation, bloomBrightness);
+         glUniform4fv(pseudoColorLocation, 1, pseudoColor);
          glBlendEquation(GL_FUNC_ADD);
          glBlendFunc(GL_ONE_MINUS_DST_ALPHA, GL_ONE);
          glDrawArrays(GL_TRIANGLES, 0, num_verts);
@@ -1116,6 +1177,7 @@ void osint_render(void)
       glUniform1i(textureLocation, 0);
       glUniform1f(scaleLocation, lineWidth);
       glUniform1f(brightnessLocation, lineBrightness);
+      glUniform4fv(pseudoColorLocation, 1, pseudoColor);
       glBlendFunc(GL_ONE, GL_ONE);
       glDrawArrays(GL_TRIANGLES, 0, num_verts);
 
@@ -1144,11 +1206,9 @@ void osint_render(void)
 
 void retro_run(void)
 {
-   int i, ret;
+   int ret;
    bool updated = false;
-   uint8_t buffer[882];
-   /* Emulator states */
-   extern unsigned snd_regs[16];
+   uint8_t buttons = 0xff;
 
    /* poll input and update states;
       buttons (snd_regs[14], 4 buttons/pl => 4 bits starting from LSB, |= for rel. &= ~ for push)
@@ -1156,100 +1216,65 @@ void retro_run(void)
    poll_cb();
 
    /* Player 1 */
+   alg_jch0 = 128;
+   if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT))
+      alg_jch0 = 0x00;
+   else if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT))
+      alg_jch0 = 0xff;
 
+   alg_jch1 = 128;
+   if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP))
+      alg_jch1 = 0xff;
+   else if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN))
+      alg_jch1 = 0x00;
 
-   alg_jch0 = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X) / 256 + 128;
-   alg_jch1 = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y) / 256 + 128;
-
-   if (alg_jch0 == 128)
+   if (alg_jch0 == 128 && alg_jch1 == 128)
    {
-      if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0,
-               RETRO_DEVICE_ID_JOYPAD_LEFT))
-         alg_jch0 = 0x00;
-      else if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0,
-               RETRO_DEVICE_ID_JOYPAD_RIGHT))
-         alg_jch0 = 0xff;
-   }
-
-   if (alg_jch1 == 128)
-   {
-      if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0,
-               RETRO_DEVICE_ID_JOYPAD_UP))
-         alg_jch1 = 0xff;
-      else if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0,
-               RETRO_DEVICE_ID_JOYPAD_DOWN ))
-         alg_jch1 = 0x00;
+      alg_jch0 = (unsigned)(128 + input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X) / 256);
+      alg_jch1 = (unsigned)(128 - input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y) / 256);
    }
 
    if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A ))
-      snd_regs[14] &= ~1;
-   else
-      snd_regs[14] |= 1;
-
+      buttons &= ~0x01;
    if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B ))
-      snd_regs[14] &= ~2;
-   else
-      snd_regs[14] |= 2;
-
+      buttons &= ~0x02;
    if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X ))
-      snd_regs[14] &= ~4;
-   else
-      snd_regs[14] |= 4;
-
+      buttons &= ~0x04;
    if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_Y ))
-      snd_regs[14] &= ~8;
-   else
-      snd_regs[14] |= 8;
+      buttons &= ~0x08;
 
    /* Player 2 */
-   alg_jch2 = input_state_cb(1, RETRO_DEVICE_ANALOG,
-         RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X) / 256 + 128;
-   alg_jch3 = input_state_cb(1, RETRO_DEVICE_ANALOG,
-         RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y) / 256 + 128;
+   alg_jch2 = 128;
+   if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT))
+      alg_jch2 = 0x00;
+   else if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT))
+      alg_jch2 = 0xff;
+
+   alg_jch3 = 128;
+   if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP))
+      alg_jch3 = 0xff;
+   else if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN))
+      alg_jch3 = 0x00;
 
    if (alg_jch2 == 128 && alg_jch3 == 128)
    {
-      if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT ))
-         alg_jch2 = 0x00;
-      else if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_RIGHT))
-         alg_jch2 = 0xff;
-
-      if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_UP   ))
-         alg_jch3 = 0xff;
-      else if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_DOWN ))
-         alg_jch3 = 0x00;
+      alg_jch2 = (unsigned)(128 + input_state_cb(1, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X) / 256);
+      alg_jch3 = (unsigned)(128 - input_state_cb(1, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y) / 256);
    }
 
    if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A ))
-      snd_regs[14] &= ~16;
-   else
-      snd_regs[14] |= 16;
-
+      buttons &= ~0x10;
    if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B ))
-      snd_regs[14] &= ~32;
-   else
-      snd_regs[14] |= 32;
-
+      buttons &= ~0x20;
    if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X ))
-      snd_regs[14] &= ~64;
-   else
-      snd_regs[14] |= 64;
-
+      buttons &= ~0x40;
    if (input_state_cb(1, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_Y ))
-      snd_regs[14] &= ~128;
-   else
-      snd_regs[14] |= 128;
+      buttons &= ~0x80;
+
+   vecx_psg_io_wr(buttons);
 
    ret = vecx_emu(30000); /* 1500000 / 1000 * 20 */
    (void)ret;
-
-   e8910_callback(NULL, buffer, 882);
-
-   for (i = 0; i < 882; i++)
-   {
-      short convs = (buffer[i] << 8) - 0x7ff;
-      audio_cb(convs, convs);
-   }
 
 #ifdef HAS_GPU	
    if (usingHWContext)
@@ -1260,4 +1285,13 @@ void retro_run(void)
 
    if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &updated) && updated)
       check_variables();
+}
+
+
+void vecx_snd_push(unsigned samps) {
+   unsigned i;
+   for (i = 0; i < samps; ++i)
+      outbuf[i * 2] = outbuf[(i * 2) + 1] = psgbuf[i] + dacbuf[i];
+
+   audio_batch_cb(outbuf, samps);
 }

@@ -22,8 +22,10 @@ typedef struct vector_type {
 extern unsigned char rom[8192];
 extern unsigned char get_cart(unsigned pos);
 extern void set_cart(unsigned pos, unsigned char data);
+extern void vecx_dac_set_buffer(int16_t *buffer);
 
-extern unsigned snd_regs[16];
+extern void vecx_snd_push(unsigned samps);
+
 extern unsigned alg_jch0;
 extern unsigned alg_jch1;
 extern unsigned alg_jch2;

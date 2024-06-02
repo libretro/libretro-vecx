@@ -19,7 +19,7 @@ ifeq ($(HAS_GPU), 1)
 endif
 
 SOURCES_C  := $(CORE_DIR)/e6809.c \
-              $(CORE_DIR)/e8910.c \
+              $(CORE_DIR)/vecx_psg.c \
               $(CORE_DIR)/libretro.c \
               $(CORE_DIR)/vecx.c
 
