@@ -136,6 +136,8 @@ else ifneq (,$(findstring ios,$(platform)))
       MINVERSION = -miphoneos-version-min=5.0
    endif
       CFLAGS += $(MINVERSION)
+      CXXLAGS += $(MINVERSION)
+      LDFLAGS += $(MINVERSION)
 # Raspberry Pi
 else ifneq (,$(findstring rpi,$(platform)))
    TARGET := $(TARGET_NAME)_libretro.so
@@ -171,6 +173,10 @@ else ifeq ($(platform), tvos-arm64)
 
    CC = cc -arch arm64 -isysroot $(IOSSDK)
    CXX = clang++ -arch arm64 -isysroot $(IOSSDK)
+   MINVERSION = -mappletvos-version-min=11.0
+   CFLAGS += $(MINVERSION)
+   CXXLAGS += $(MINVERSION)
+   LDFLAGS += $(MINVERSION)
 
 # Theos iOS
 else ifeq ($(platform), theos_ios)
