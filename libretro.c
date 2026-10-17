@@ -641,8 +641,6 @@ void retro_init(void)
 
    environ_cb(RETRO_ENVIRONMENT_SET_PERFORMANCE_LEVEL, &level);
 
-   check_variables();
-
    vecx_psg_set_buffer(psgbuf);
    vecx_dac_set_buffer(dacbuf);
 }
@@ -695,6 +693,9 @@ bool retro_load_game(const struct retro_game_info *info)
 
    if (!info)
       return false;
+
+   /* Frontends may only accept a hardware context once a game is loading */
+   check_variables();
 #ifdef HAS_GPU
    if (usingHWContext)
       usingHWContext = set_rendering_context(true);
